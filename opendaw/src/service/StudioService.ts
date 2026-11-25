@@ -1,0 +1,597 @@
+import {
+    DefaultObservableValue,
+    EmptyExec,
+    Errors,
+    Func,
+    int,
+    isAbsent,
+    MutableObservableOption,
+    Notifier,
+    Nullable,
+    Observer,
+    Option,
+    Provider,
+    RuntimeNotifier,
+    RuntimeSignal,
+    safeRead,
+    Subscription,
+    Terminable,
+    Terminator,
+    tryCatch,
+    UUID
+} from "@opendaw/lib-std"
+import {ChainedSampleProvider, ChainedSoundfontProvider, ChainedWclapProvider, TrafficMeter} from "@opendaw/studio-p2p"
+import {populateStudioMenu} from "@/service/StudioMenu"
+import {installSharedLocators} from "@/flowtu/work-area"
+import {Snapping} from "@/ui/timeline/Snapping.ts"
+import {PanelContents} from "@/ui/workspace/PanelContents.tsx"
+import {createPanelFactory} from "@/ui/workspace/PanelFactory.tsx"
+import {SpotlightDataSupplier} from "@/ui/spotlight/SpotlightDataSupplier.ts"
+import {Workspace} from "@/ui/workspace/Workspace.ts"
+import {BrowseScope} from "@/ui/browse/BrowseScope"
+import {ModulatorReveal} from "@/ui/modulation/ModulatorReveal.ts"
+import {PanelType} from "@/ui/workspace/PanelType.ts"
+import {Dialogs} from "@/ui/components/dialogs.tsx"
+import {BuildInfo} from "@/BuildInfo.ts"
+import {SamplePlayback} from "@/service/SamplePlayback"
+import {ProjectProfileService} from "./ProjectProfileService"
+import {StudioNavigation} from "./StudioNavigation"
+import {StudioSignal} from "./StudioSignal"
+import {AudioOutputDevice} from "@/audio/AudioOutputDevice"
+import {FooterLabel} from "@/service/FooterLabel"
+import {PPQN} from "@opendaw/lib-dsp"
+import {AnimationFrame, Browser, ConsoleCommands, Dragging, Files} from "@opendaw/lib-dom"
+import {Promises} from "@opendaw/lib-runtime"
+import {InstrumentFactories} from "@opendaw/studio-adapters"
+import {Address} from "@opendaw/lib-box"
+import {
+    AudioContentFactory,
+    AudioMaterialAnalyzer,
+    AudioWorklets,
+    CloudAuthManager,
+    DawProjectService,
+    EngineFacade,
+    EngineWorklet,
+    ExternalLib,
+    FilePickerAcceptTypes,
+    GlobalSampleLoaderManager,
+    GlobalSoundfontLoaderManager,
+    Project,
+    ProjectEnv,
+    ProjectMeta,
+    ProjectProfile,
+    ProjectSignals,
+    ProjectStorage,
+    Recovery,
+    RestartWorklet,
+    SampleService,
+    SoundfontService,
+    StudioPreferences,
+    TemplateStorage,
+    TimelineRange,
+    WasmBpmDetector
+} from "@opendaw/studio-core"
+import {ProjectDialogs} from "@/project/ProjectDialogs"
+import {PresetService} from "@/ui/browse/PresetService"
+import {AudioFileBox} from "@opendaw/studio-boxes"
+import {Surface} from "@/ui/surface/Surface"
+import {SoftwareMIDIPanel} from "@/ui/software-midi/SoftwareMIDIPanel"
+import {Mixdowns} from "@/service/Mixdowns"
+import {showWavExport} from "@/flowtu/WorkAreaExportDialog"
+import {ShadertoyState} from "@/ui/shadertoy/ShadertoyState"
+import {CodeEditorState} from "@/ui/code-editor/CodeEditorState"
+import {RoomAwareness} from "@/service/RoomAwareness"
+import {ChatService} from "@/chat/ChatService"
+
+/**
+ * I am just piling stuff after stuff in here to boot the environment.
+ * I suppose this gets cleaned up sooner or later.
+ */
+
+const range = new TimelineRange({padding: 12})
+// Make millisecond / frame edits visibly selectable when zooming into a waveform.
+range.minimum = PPQN.Quarter / 128
+range.maxUnits = PPQN.fromSignature(128, 1)
+range.showUnitInterval(0, PPQN.fromSignature(9, 1))
+
+const snapping = new Snapping(range)
+
+// The offline analyzer (transient descriptors, tempo, material features) the core worker instantiates once.
+const STRETCH_WASM_URL = `${import.meta.env.BASE_URL}wasm-engine/wasm/stretch_wasm.wasm`
+
+export class StudioService implements ProjectEnv {
+    readonly layout = {
+        screen: new DefaultObservableValue<Nullable<Workspace.ScreenKeys>>("default"),
+        browseScope: new DefaultObservableValue<BrowseScope>(BrowseScope.Presets)
+    } as const
+    readonly timeline = {
+        range,
+        snapping,
+        overviewMinimum: new DefaultObservableValue(0),
+        clips: {
+            count: new DefaultObservableValue(3),
+            columns: new DefaultObservableValue(8),
+            scroll: new DefaultObservableValue(0),
+            visible: StudioPreferences.createMutableObservableValue("timeline", "clips")
+        },
+        followCursor: StudioPreferences.createMutableObservableValue("timeline", "follow-cursor"),
+        primaryVisibility: {
+            markers: StudioPreferences.createMutableObservableValue("timeline", "markers"),
+            tempo: StudioPreferences.createMutableObservableValue("timeline", "tempo"),
+            signature: StudioPreferences.createMutableObservableValue("timeline", "signature")
+        }
+    } as const
+    readonly menu = populateStudioMenu(this)
+    readonly panelLayout = new PanelContents(createPanelFactory(this))
+    readonly spotlightDataSupplier = new SpotlightDataSupplier()
+    readonly samplePlayback: SamplePlayback
+    readonly recovery = new Recovery(() => this.#projectProfileService.getValue(), this)
+    readonly engine = new EngineFacade()
+    readonly presets = new PresetService(this)
+    readonly materialAnalyzer = new AudioMaterialAnalyzer(STRETCH_WASM_URL)
+
+    readonly #softwareKeyboardLifeCycle = new Terminator()
+    readonly #signals = new Notifier<StudioSignal>()
+    readonly #projectProfileService: ProjectProfileService
+    readonly #navigation: StudioNavigation
+    readonly #sampleService: SampleService
+    readonly #soundfontService: SoundfontService
+
+    readonly #activeCodeEditor: MutableObservableOption<CodeEditorState> = new MutableObservableOption()
+    readonly #roomAwareness = new DefaultObservableValue<Nullable<RoomAwareness>>(null)
+    readonly #trafficMeter = new DefaultObservableValue<Nullable<TrafficMeter>>(null)
+    readonly #chatService = new MutableObservableOption<ChatService>()
+
+    #shadertoyState: Option<ShadertoyState> = Option.None
+    #factoryFooterLabel: Option<Provider<FooterLabel>> = Option.None
+    regionModifierInProgress: boolean = false
+
+    constructor(readonly audioContext: AudioContext,
+                readonly audioWorklets: AudioWorklets,
+                readonly audioDevices: AudioOutputDevice,
+                readonly sampleManager: GlobalSampleLoaderManager,
+                readonly soundfontManager: GlobalSoundfontLoaderManager,
+                readonly chainedSampleProvider: ChainedSampleProvider,
+                readonly chainedSoundfontProvider: ChainedSoundfontProvider,
+                readonly chainedWclapProvider: ChainedWclapProvider,
+                readonly cloudAuthManager: CloudAuthManager,
+                readonly buildInfo: BuildInfo) {
+        this.#sampleService = new SampleService(audioContext, new WasmBpmDetector(STRETCH_WASM_URL))
+        this.#sampleService.subscribe(([sample, _]) => this.#signals.notify({
+            type: "import-sample",
+            sample
+        }))
+        this.#soundfontService = new SoundfontService()
+        this.#soundfontService.subscribe(([soundfont, _]) => this.#signals.notify({
+            type: "import-soundfont",
+            soundfont
+        }))
+        this.samplePlayback = new SamplePlayback()
+        ModulatorReveal.requested.subscribe(option =>
+            option.ifSome(() => {if (this.hasProfile) {this.switchScreen("modulation")}}))
+        this.#projectProfileService = new ProjectProfileService({
+            env: this,
+            sampleService: this.#sampleService, sampleManager: this.sampleManager,
+            soundfontService: this.#soundfontService, soundfontManager: this.soundfontManager
+        })
+
+        this.#navigation = new StudioNavigation(this.layout.screen, this.#projectProfileService)
+        this.#listenProject()
+        this.#installConsoleCommands()
+        this.#populateSpotlightData()
+        this.#configBeforeUnload()
+        this.#checkRecovery()
+        this.#listenPreferences()
+    }
+
+    get sampleRate(): number {return this.audioContext.sampleRate}
+    get sampleService(): SampleService {return this.#sampleService}
+    get soundfontService(): SoundfontService {return this.#soundfontService}
+    get projectProfileService(): ProjectProfileService {return this.#projectProfileService}
+
+    panicEngine(): void {this.runIfProject(({engine}) => engine.panic())}
+
+    async newProject() {
+        if (!await this.#projectProfileService.approveLosingChanges()) {return}
+        this.#projectProfileService.setValue(Option.wrap(
+            new ProjectProfile(UUID.generate(), Project.new(this), ProjectMeta.init("Untitled"), Option.None)))
+    }
+
+    async closeProject() {return this.#navigation.closeProject()}
+
+    async browseLocalProjects(): Promise<void> {
+        if (this.#projectProfileService.workspaceFiles) return this.#projectProfileService.workspaceFiles.open()
+        const {status, value} = await Promises.tryCatch(ProjectDialogs.showBrowseDialog(this))
+        if (status === "resolved") {
+            const [uuid, meta] = value
+            await this.#projectProfileService.load(uuid, meta)
+        }
+    }
+
+    async exportBundle() {return this.#projectProfileService.workspaceFiles?.exportFile() ?? this.#projectProfileService.exportBundle()}
+    async importBundle() {
+        if (this.#projectProfileService.workspaceFiles) return this.#projectProfileService.workspaceFiles.importFile()
+        return this.#projectProfileService.importBundle()
+    }
+    async deleteProject(uuid: UUID.Bytes, meta: ProjectMeta): Promise<void> {
+        if (this.#projectProfileService.getValue().ifSome(profile => UUID.equals(profile.uuid, uuid)) === true) {
+            await this.closeProject()
+        }
+        const {status} = await Promises.tryCatch(ProjectStorage.deleteProject(uuid))
+        if (status === "resolved") {
+            this.#signals.notify({type: "delete-project", meta})
+        }
+    }
+
+    async deleteTemplate(uuid: UUID.Bytes): Promise<void> {
+        const {status} = await Promises.tryCatch(TemplateStorage.deleteTemplate(uuid))
+        if (status === "resolved") {
+            RuntimeSignal.dispatch(ProjectSignals.StorageUpdated)
+        }
+    }
+
+    async exportMixdown() {
+        if (this.hasProfile) await showWavExport(this, "mix")
+    }
+
+    async exportWithFormat() {
+        if (!this.hasProfile) return
+        const {status, error} = await Promises.tryCatch(Mixdowns.exportMixdown(this.profile))
+        if (status === "rejected" && !Errors.isAbort(error))
+            RuntimeNotifier.notify({message: String(error), icon: "Warning"})
+    }
+
+    async exportStems() {
+        if (this.hasProfile) await showWavExport(this, "stems")
+    }
+
+    async importDawproject() {
+        (await DawProjectService.importDawproject(this.sampleService))
+            .ifSome(skeleton => this.#projectProfileService
+                .setProject(Project.fromSkeleton(this, skeleton), "Dawproject"))
+    }
+
+    async exportDawproject() {
+        const approved = await Dialogs.approve({
+            headline: "Export DAWproject",
+            message: "DAWproject is an experimental exchange format by Bitwig.\nDevices and their settings may not survive the conversion, so the exported file is not a reliable copy of your project. Do not use it as a backup. To back up your work or send it to another user, use 'Save Bundle File to Disk...' instead.",
+            approveText: "Export"
+        })
+        if (!approved) {return}
+        return this.#projectProfileService.getValue().ifSome(profile => DawProjectService.exportDawproject(profile))
+    }
+
+    async importPreset() {await this.presets.loadBundleFromDisk()}
+
+    async importStems(): Promise<void> {
+        const fileResult = await Promises.tryCatch(Files.open({types: [FilePickerAcceptTypes.ZipFileType]}))
+        if (fileResult.status === "rejected") {return}
+        const firstFile = fileResult.value.at(0)
+        if (isAbsent(firstFile)) {return}
+        const {status, value: JSZip} = await ExternalLib.JSZip()
+        if (status === "rejected") {return}
+        const zipResult = await Promises.tryCatch(JSZip.loadAsync(await firstFile.arrayBuffer()))
+        if (zipResult.status === "rejected") {
+            console.warn(zipResult.error)
+            RuntimeNotifier.notify({message: "Import failed.", icon: "Warning"})
+            return
+        }
+        const audioEntries = Object.entries(zipResult.value.files)
+            .filter(([path, file]) => {
+                if (file.dir) {return false}
+                const lower = path.toLowerCase()
+                if (!lower.endsWith(".wav")) {return false}
+                if (lower.startsWith("__macosx/")) {return false}
+                const name = path.substring(path.lastIndexOf("/") + 1)
+                return !name.startsWith("._")
+            })
+        if (audioEntries.length === 0) {return}
+        if (!this.hasProfile) {
+            this.#projectProfileService.setValue(Option.wrap(
+                new ProjectProfile(UUID.generate(), Project.new(this), ProjectMeta.init("Untitled"), Option.None)))
+        }
+        const {editing, boxGraph, api} = this.project
+        let aborted = false
+        const onCancel = () => {aborted = true}
+        let dialog = RuntimeNotifier.progress({headline: "Importing Stems...", cancel: onCancel})
+        for (let index = 0; index < audioEntries.length; index++) {
+            if (aborted) {break}
+            const [path, file] = audioEntries[index]
+            const name = path.substring(path.lastIndexOf("/") + 1).replace(/\.wav$/i, "")
+            dialog.message = `Importing ${name} (${index + 1}/${audioEntries.length})`
+            const arrayBuffer = await file.async("arraybuffer").then(buffer => buffer.slice(0))
+            if (aborted) {break}
+            const {status, value: sample, error} = await Promises.tryCatch(this.#sampleService.importFile({
+                name,
+                arrayBuffer
+            }))
+            if (aborted) {break}
+            if (status === "rejected") {
+                console.warn(`Failed to import '${name}'`, error)
+                dialog.terminate()
+                const skip = await RuntimeNotifier.approve({
+                    headline: `Failed to import '${name}'`,
+                    message: String(error),
+                    approveText: "Skip",
+                    cancelText: "Cancel Import"
+                })
+                if (!skip) {break}
+                dialog = RuntimeNotifier.progress({headline: "Importing Stems...", cancel: onCancel})
+                continue
+            }
+            const uuid = UUID.parse(sample.uuid)
+            await Promises.tryCatch(this.sampleManager.getAudioData(uuid))
+            if (aborted) {break}
+            editing.modify(() => {
+                const {trackBox, instrumentBox} = api.createInstrument(InstrumentFactories.Tape)
+                instrumentBox.label.setValue(name)
+                const audioFileBox = boxGraph.findBox<AudioFileBox>(uuid)
+                    .unwrapOrElse(() => AudioFileBox.create(boxGraph, uuid, box => {
+                        box.fileName.setValue(name)
+                        box.startInSeconds.setValue(0)
+                        box.endInSeconds.setValue(sample.duration)
+                    }))
+                AudioContentFactory.createNotStretchedRegion({
+                    boxGraph, sample, audioFileBox, position: 0, targetTrack: trackBox
+                })
+            })
+        }
+        dialog.terminate()
+    }
+
+    runIfProject<R>(procedure: Func<Project, R>): Option<R> {
+        return this.#projectProfileService.getValue().map(({project}) => procedure(project))
+    }
+
+    get project(): Project {return this.profile.project}
+    get optProject(): Option<Project> {return this.projectProfileService.getValue().map(({project}) => project)}
+    get profile(): ProjectProfile {return this.#projectProfileService.getValue().unwrap("No profile available")}
+    get hasProfile(): boolean {return this.#projectProfileService.getValue().nonEmpty()}
+
+    requestMediaPlacement(files?: readonly File[], trackId?: string, position?: number): void {
+        this.#signals.notify({type: "place-media", files, trackId, position})
+    }
+
+    subscribeSignal<T extends StudioSignal["type"]>(
+        observer: Observer<Extract<StudioSignal, { type: T }>>, type: T): Subscription {
+        return this.#signals.subscribe(signal => {
+            if (signal.type === type) {
+                observer(signal as Extract<StudioSignal, { type: T }>)
+            }
+        })
+    }
+
+    switchScreen(key: Nullable<Workspace.ScreenKeys>): void {this.#navigation.switchScreen(key)}
+
+    registerFooter(factory: Provider<FooterLabel>): void {
+        this.#factoryFooterLabel = Option.wrap(factory)
+    }
+
+    factoryFooterLabel(): Option<Provider<FooterLabel>> {return this.#factoryFooterLabel}
+
+    get roomAwareness(): DefaultObservableValue<Nullable<RoomAwareness>> {return this.#roomAwareness}
+    setRoomAwareness(value: Nullable<RoomAwareness>): void {this.#roomAwareness.setValue(value)}
+    get trafficMeter(): DefaultObservableValue<Nullable<TrafficMeter>> {return this.#trafficMeter}
+    setTrafficMeter(value: Nullable<TrafficMeter>): void {this.#trafficMeter.setValue(value)}
+    get chatService(): MutableObservableOption<ChatService> {return this.#chatService}
+
+    get optShadertoyState(): Option<ShadertoyState> {return this.#shadertoyState}
+    get activeCodeEditor(): MutableObservableOption<CodeEditorState> {return this.#activeCodeEditor}
+
+    openCodeEditor(state: CodeEditorState): void {
+        const previousScreen = this.layout.screen.getValue() === "code"
+            ? this.#activeCodeEditor.map(existing => existing.previousScreen).unwrapOrNull() ?? state.previousScreen
+            : state.previousScreen
+        this.layout.screen.setValue(null)
+        this.#activeCodeEditor.wrap({...state, previousScreen})
+        this.switchScreen("code")
+    }
+
+    closeCodeEditor(): void {
+        const previousScreen = this.#activeCodeEditor.map(state => state.previousScreen).unwrapOrNull()
+        this.#activeCodeEditor.clear()
+        if (this.layout.screen.getValue() === "code") {
+            // Defer the screen switch to avoid cascading UI updates during synchronous
+            // box deletion. Switching the screen triggers DevicePanel re-evaluation which
+            // clears mounts before remaining pointerHub onRemoved events have finished.
+            queueMicrotask(() => this.layout.screen.setValue(previousScreen ?? "default"))
+        }
+    }
+
+    resetPeaks(): void {this.#signals.notify({type: "reset-peaks"})}
+
+    async verifyProject() {
+        if (!this.hasProfile) {return}
+        const {boxGraph} = this.project
+        const result = boxGraph.verifyPointers()
+        RuntimeNotifier.notify({message: `Project is okay. All ${result.count} pointers are fine.`, icon: "Checkbox"})
+    }
+
+    toggleSoftwareKeyboard(): void {
+        if (this.isSoftwareKeyboardVisible()) {
+            this.#softwareKeyboardLifeCycle.terminate()
+        } else {
+            const element = SoftwareMIDIPanel({
+                lifecycle: this.#softwareKeyboardLifeCycle,
+                service: this
+            })
+            Surface.get(window).floating.appendChild(element)
+            this.#softwareKeyboardLifeCycle.own(Terminable.create(() => element.remove()))
+        }
+    }
+
+    isSoftwareKeyboardVisible(): boolean {return this.#softwareKeyboardLifeCycle.nonEmpty()}
+
+    #listenProject(): void {
+        const lifeTime = new Terminator()
+        const observer = (optProfile: Option<ProjectProfile>) => {
+            this.layout.screen.setValue(null)
+            this.panelLayout.releasePopouts()
+            lifeTime.terminate()
+            document.body.classList.toggle("no-project", optProfile.isEmpty())
+            if (optProfile.nonEmpty()) {
+                const profile = optProfile.unwrap()
+                const {project, meta} = profile
+                lifeTime.own(installSharedLocators(project))
+                console.debug(`switch to %c${meta.name}%c`, "color: hsl(25, 69%, 63%)", "color: inherit")
+                const {timelineBox, timelineBoxAdapter, userEditingManager} = project
+                const {overviewMinimum} = this.timeline
+                range.showUnitInterval(0, PPQN.fromSignature(9, 1))
+                this.#shadertoyState = Option.wrap(lifeTime.own(new ShadertoyState(project)))
+                //
+                // -------------------------------
+                // Show views if content available
+                // -------------------------------
+                //
+                // Tempo
+                if (timelineBoxAdapter.tempoTrackEvents.mapOr(collection => !collection.events.isEmpty(), false)) {
+                    this.timeline.primaryVisibility.tempo.setValue(true)
+                }
+                // Signature
+                if (timelineBoxAdapter.signatureTrack.size > 0) {
+                    this.timeline.primaryVisibility.signature.setValue(true)
+                }
+                // Clips
+                const maxClipIndex: int = project.rootBoxAdapter.audioUnits.adapters()
+                    .reduce((max, unit) => Math.max(max, unit.tracks.values()
+                        .reduce((max, track) => Math.max(max, track.clips.collection
+                            .getMinFreeIndex()), 0)), 0)
+                this.timeline.clips.scroll.setValue(0)
+                this.timeline.clips.columns.setValue(Math.max(8, maxClipIndex + 1))
+                if (maxClipIndex > 0) {
+                    this.timeline.clips.count.setValue(Math.max(maxClipIndex + 1, 3))
+                    this.timeline.clips.visible.setValue(true)
+                } else {
+                    this.timeline.clips.count.setValue(3)
+                }
+                let screen: Nullable<Workspace.ScreenKeys> = null
+                const restart: RestartWorklet = {
+                    unload: async (event: unknown) => {
+                        screen = this.layout.screen.getValue()
+                        // we need to restart the screen to subscribe to new broadcaster instances
+                        this.switchScreen(null)
+                        this.engine.releaseWorklet()
+                        return Dialogs.info({
+                            headline: "Audio-Engine Error",
+                            message: String(safeRead(event, "error", "message") ?? "Unknown error"),
+                            okText: "Restart Engine",
+                            cancelable: false
+                        })
+                    },
+                    load: (engine: EngineWorklet) => {
+                        if (!this.#projectProfileService.getValue().contains(profile)) {return}
+                        this.engine.setWorklet(engine)
+                        this.switchScreen(screen)
+                    }
+                }
+                this.engine.releaseWorklet()
+                const {status, value: worklet, error} = tryCatch(() => project.startAudioWorklet(restart, {}))
+                if (status === "failure") {
+                    // The worklet failed to start, so #worklet stays None. The profile is still installed and
+                    // DevicePanel is bound to it, so it would mount worklet-dependent device editors (e.g. Apparat's
+                    // subscribeDeviceMessage) that unwrap the absent worklet and panic. Leave no worklet-dependent
+                    // screen up.
+                    this.layout.screen.setValue("dashboard")
+                    Dialogs.info({
+                        headline: "Audio-Engine Error",
+                        message: `Could not start the audio engine. Your browser may not support all required features. (${Errors.toString(error)})`,
+                        okText: "OK",
+                        cancelable: false
+                    }).finally()
+                    return
+                }
+                this.engine.setWorklet(worklet)
+                lifeTime.ownAll(
+                    project,
+                    snapping.registerSignatureTrackAdapter(project.timelineBoxAdapter.signatureTrack),
+                    userEditingManager.timeline.catchupAndSubscribe(option => option.ifSome(vertex => {
+                        const panel = this.panelLayout.getByType(PanelType.ContentEditor)
+                        const revision = panel.visibilityRevision
+                        AnimationFrame.once(() => {
+                            if (this.#projectProfileService.getValue().contains(profile)
+                                && userEditingManager.timeline.get().contains(vertex)
+                                && panel.visibilityRevision === revision) {
+                                this.panelLayout.showIfAvailable(PanelType.ContentEditor)
+                            }
+                        })
+                    })),
+                    timelineBox.durationInPulses.catchupAndSubscribe(() => updateRangeLimit(this.timeline.overviewMinimum.getValue() > 0)),
+                    this.timeline.overviewMinimum.subscribe(() => updateRangeLimit(true))
+                )
+                // Enlarging the navigation domain must preserve the current time under the playhead.
+                function updateRangeLimit(preserveView: boolean) {
+                    const limit = Math.max(timelineBox.durationInPulses.getValue() + PPQN.Bar, overviewMinimum.getValue())
+                    if (limit === range.maxUnits) return
+                    const width = Math.min(range.unitRange, limit)
+                    const start = Math.max(0, Math.min(range.unitMin, limit - width))
+                    range.maxUnits = limit
+                    if (preserveView) range.showUnitInterval(start, start + width)
+                }
+                this.#navigation.onProjectOpened()
+            } else {
+                this.engine.releaseWorklet()
+                range.maxUnits = PPQN.fromSignature(128, 1)
+                range.showUnitInterval(0, PPQN.fromSignature(9, 1))
+                this.#navigation.onProjectClosed()
+            }
+        }
+        this.#projectProfileService.catchupAndSubscribe(observer)
+    }
+
+    #installConsoleCommands(): void {
+        ConsoleCommands.exportAccessor("box.graph.boxes",
+            () => this.runIfProject(({boxGraph}) => boxGraph.debugBoxes()))
+        ConsoleCommands.exportMethod("box.graph.lookup",
+            (address: string) => this.runIfProject(({boxGraph}) => boxGraph.findVertex(Address.decode(address)).match({
+                none: () => "not found",
+                some: vertex => vertex.toString()
+            })).match({none: () => "no project", some: value => value}))
+        ConsoleCommands.exportAccessor("box.graph.dependencies",
+            () => this.runIfProject(project => project.boxGraph.debugDependencies()))
+        ConsoleCommands.exportMethod("engine.play",
+            () => {
+                this.engine.play()
+                return this.hasProfile
+            })
+        ConsoleCommands.exportMethod("engine.stop",
+            () => {
+                this.engine.stop(true)
+                return this.hasProfile
+            })
+        ConsoleCommands.exportMethod("engine.position", () => this.engine.position.getValue())
+        ConsoleCommands.exportMethod("engine.isPlaying", () => this.engine.isPlaying.getValue())
+    }
+
+    #populateSpotlightData(): void {
+        this.spotlightDataSupplier.registerAction("Create Synth", EmptyExec)
+        this.spotlightDataSupplier.registerAction("Create Drumcomputer", EmptyExec)
+        this.spotlightDataSupplier.registerAction("Create ModularSystem", EmptyExec)
+    }
+
+    #configBeforeUnload(): void {
+        if (Browser.isLocalHost()) {return}
+        window.addEventListener("beforeunload", (event: Event) => {
+            if (!navigator.onLine) {event.preventDefault()}
+            if (this.#projectProfileService.hasUnsavedChanges()) {
+                event.preventDefault()
+            }
+        })
+    }
+
+    #checkRecovery(): void {
+        this.recovery.restoreProfile().then(optProfile => {
+            if (optProfile.nonEmpty()) {
+                this.#projectProfileService.setValue(optProfile)
+            }
+        }, EmptyExec)
+    }
+
+    #listenPreferences(): void {
+        StudioPreferences.catchupAndSubscribe(value =>
+            Dragging.usePointerLock = value && Browser.isChrome(), "pointer", "dragging-use-pointer-lock")
+        StudioPreferences.catchupAndSubscribe(value =>
+            document.body.classList.toggle("experimental-visible", value), "debug", "enable-beta-features")
+        StudioPreferences.catchupAndSubscribe(value =>
+            document.body.classList.toggle("help-hidden", !value), "visibility", "visible-help-hints")
+    }
+}

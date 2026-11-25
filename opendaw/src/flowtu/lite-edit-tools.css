@@ -1,0 +1,31 @@
+.ft-lite-edit-tools {display:flex;align-items:center;gap:2px;flex:0 1 auto;min-width:0;flex-wrap:wrap}
+.ft-lite-edit-tools[hidden] {display:none}
+.ft-lite-edit-tools .ft-edit-add {margin-inline-end:5px}
+.ft-lite-edit-tools button[data-lite-edit] {
+    appearance:none;display:inline-flex;align-items:center;justify-content:center;
+    flex:none;box-sizing:border-box;width:30px;height:30px;min-width:0;min-height:0;margin:0;padding:0;
+    border:0;border-radius:7px;background:transparent;color:#dedee2;box-shadow:none;cursor:pointer
+}
+.ft-lite-edit-tools button[data-lite-edit] svg {width:18px;height:18px;flex:none;fill:none;stroke:currentColor;stroke-width:1.5;stroke-linejoin:round;stroke-linecap:round}
+.ft-lite-edit-tools button[data-lite-edit=more] {border-radius:50%;border:1px solid #dce1e352;background:#18202847}
+.ft-lite-edit-tools button[data-lite-edit=undo],.ft-lite-edit-tools button[data-lite-edit=volume] {margin-inline-start:4px}
+.ft-lite-edit-tools button[data-lite-edit]:not([aria-disabled=true]):hover {background:#e4eef21b;color:#fff}
+.ft-lite-edit-tools button[data-lite-edit]:is([aria-expanded=true],[aria-pressed=true]) {color:#ffcfaa;background:#f2b07b22}
+.ft-lite-edit-tools button[data-lite-edit]:focus-visible {outline:2px solid #e6c7a9;outline-offset:-2px}
+.ft-lite-edit-tools button[data-lite-edit][aria-disabled=true] {opacity:.38;cursor:default}
+.ft-lite-edit-tools .ft-lite-more-tools {min-width:0;width:max-content;max-width:100%;display:grid;grid-template-columns:repeat(5,34px);gap:3px;padding:7px;border:1px solid #55565e;border-radius:12px;background:#292b30;color:#eee;box-shadow:0 8px 24px #0006}
+.ft-lite-edit-tools .ft-lite-more-tools[hidden] {display:none}
+.ft-lite-edit-tools .ft-lite-more-tools button[data-lite-edit] {width:34px;height:34px}
+.ft-lite-command-hint {position:fixed;z-index:2147483647;max-width:min(36rem,94vw);padding:5px 9px;border:1px solid #63656b;border-radius:6px;background:#24262b;color:#f1f1f3;font:12px/1.4 system-ui;box-shadow:0 2px 12px #0004;pointer-events:none}
+.ft-lite-command-hint[hidden] {display:none}
+@media(min-width:900px) {
+    .ft-lite.ft-using-timeline-tools:not([data-expanded-edit-tools]) .ft-lite-native > .flowtu-editing-toolbar,
+    .ft-lite.ft-using-timeline-tools .ft-lite-timeline > .ft-lite-section-head :is(.ft-lite-import-clip,.ft-lite-mark) {display:none}
+    .ft-using-timeline-tools .ft-lite-timeline > .ft-lite-section-head h2 {margin:0;white-space:nowrap}
+    .ft-lite-section-head > .ft-lite-edit-tools {margin-inline-start:5px;padding-inline-start:8px;border-inline-start:1px solid #3b3c40}
+    .ft-lite-section-head > .ft-native-zoom {margin-inline-start:auto}
+    .ft-native-zoom button[data-zoom=fit] svg {width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;vertical-align:middle}
+}
+@media (pointer:coarse) {
+    .ft-lite-edit-tools button[data-lite-edit] {width:40px;height:40px}
+}

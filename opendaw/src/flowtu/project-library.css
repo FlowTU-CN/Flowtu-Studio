@@ -1,0 +1,28 @@
+.ft-project-library {
+    color: #e2eaf1; background: #111b26; border: 1px solid #394d60; border-radius: 12px;
+    width: min(440px, calc(100vw - 28px)); max-height: min(82dvh, 640px);
+    padding: 18px; box-sizing: border-box; box-shadow: 0 14px 70px #02050999; font: 14px/1.4 system-ui, sans-serif;
+}
+.ft-project-library::backdrop {background: #03070bbb}
+.ft-project-library header,.ft-project-library footer {display: flex; align-items: center; gap: 9px}
+.ft-project-library header {justify-content: space-between; margin-bottom: 12px}
+.ft-project-library h2 {margin: 0; font-size: 19px; font-weight: 600}
+.ft-project-library h3 {margin: 14px 0 4px; color: #92adc2; font-size: 12px; font-weight: 600}
+.ft-project-library p {margin: 7px 0; color: #b3c1cd}
+.ft-project-library .ft-project-list {overflow: auto; max-height: 48dvh}
+.ft-project-library footer {flex-wrap: wrap; justify-content: flex-end; margin-top: 14px}
+.ft-project-library label {display: grid; gap: 5px}
+.ft-project-library input {border: 1px solid #485b6d; padding: 10px; border-radius: 6px; background: #0c1620; color: inherit; font: inherit}
+.ft-project-library button,.ft-project-library a {font: inherit; text-decoration: none; cursor: pointer; background: #203141; color: inherit; border: 1px solid #425469; border-radius: 6px; padding: 7px 10px}
+.ft-project-library header button {font-size: 20px; padding: 1px 9px}
+.ft-project-library form button {display:block; margin: 16px 0 0 auto; background: #345d80}
+.ft-project-library .ft-project-item {display: grid; width: 100%; text-align: start; gap: 3px; margin: 4px 0}
+.ft-project-library .ft-project-item:hover {background: #2b4054}
+.ft-project-item strong {overflow-wrap: anywhere}
+.ft-project-item small {color: #adbfce; font-size: 12px}
+
+.ft-project-library form {display:grid;gap:12px}
+.ft-project-library form select {min-height:38px;padding:6px 10px;border:1px solid #485b6d;border-radius:6px;background:#0c1620;color:inherit;font:inherit}
+.ft-project-library form small {color:#adbfce}
+.ft-project-library form small:empty {display:none}
+.ft-project-library form button {margin-top:0}

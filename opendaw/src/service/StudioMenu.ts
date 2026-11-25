@@ -1,0 +1,165 @@
+import {EmptyExec} from "@opendaw/lib-std"
+import {Browser, Files} from "@opendaw/lib-dom"
+import {RouteLocation} from "@opendaw/lib-jsx"
+import {Promises} from "@opendaw/lib-runtime"
+import {Colors, IconSymbol} from "@opendaw/studio-enums"
+import {CloudBackup, FilePickerAcceptTypes, MenuItem} from "@opendaw/studio-core"
+import {StudioService} from "@/service/StudioService"
+import {GlobalShortcuts} from "@/ui/shortcuts/GlobalShortcuts"
+import {VideoRenderer} from "@/video/VideoRenderer"
+import {createDebugMenu} from "@/service/DebugMenu"
+import {connectRoom} from "@/service/StudioLiveRoomConnect"
+import {NeuralDemux} from "@/service/NeuralDemux.tsx"
+import {NextcloudDialogs} from "@/project/NextcloudDialogs"
+import {openManual} from "@/ui/manuals"
+
+export const populateStudioMenu = (service: StudioService) => {
+    const Global = GlobalShortcuts
+    return MenuItem.root()
+        .setRuntimeChildrenProcedure(parent => {
+                parent.addMenuItem(
+                    MenuItem.header({label: "Flowtu Studio", icon: IconSymbol.Timeline, color: Colors.blue}),
+                    MenuItem.default({
+                        label: "Dashboard",
+                        shortcut: Global["workspace-screen-dashboard"].shortcut.format()
+                    }).setTriggerProcedure(() => service.closeProject()),
+                    MenuItem.default({
+                        label: "New",
+                        separatorBefore: true
+                    }).setTriggerProcedure(() => service.newProject()),
+                    MenuItem.default({
+                        label: "Open...",
+                        shortcut: Global["project-open"].shortcut.format()
+                    }).setTriggerProcedure(() => service.browseLocalProjects()),
+                    MenuItem.default({
+                        label: "Save",
+                        shortcut: Global["project-save"].shortcut.format(),
+                        selectable: service.hasProfile
+                    }).setTriggerProcedure(() => service.projectProfileService.save()),
+                    MenuItem.default({
+                        label: "Save As...",
+                        shortcut: Global["project-save-as"].shortcut.format(),
+                        selectable: service.hasProfile
+                    }).setTriggerProcedure(() => service.projectProfileService.saveAs()),
+                    MenuItem.default({
+                        label: "Save as Template...",
+                        selectable: service.hasProfile
+                    }).setTriggerProcedure(() => service.projectProfileService.saveAsTemplate()),
+                    MenuItem.default({
+                        label: "Save Bundle File to Disk...",
+                        selectable: service.hasProfile
+                    }).setTriggerProcedure(() => service.exportBundle()),
+                    MenuItem.default({label: "Open Bundle File from Disk..."})
+                        .setTriggerProcedure(() => service.importBundle()),
+                    MenuItem.default({label: "Import", separatorBefore: true})
+                        .setRuntimeChildrenProcedure(parent => parent.addMenuItem(
+                            MenuItem.default({label: "Audio Files..."})
+                                .setTriggerProcedure(() => service.sampleService.browse(true)),
+                            MenuItem.default({label: "Stems (Zip)..."})
+                                .setTriggerProcedure(() => service.importStems()),
+                            MenuItem.default({label: "Neural Demux..."})
+                                .setTriggerProcedure(() => NeuralDemux.run(service).catch(EmptyExec)),
+                            MenuItem.default({label: "Soundfont Files..."})
+                                .setTriggerProcedure(() => service.soundfontService.browse(true)),
+                            MenuItem.default({label: "Preset Bundle..."})
+                                .setTriggerProcedure(() => service.importPreset().then(EmptyExec)),
+                            MenuItem.default({label: "DAWproject..."})
+                                .setTriggerProcedure(() => service.importDawproject().then(EmptyExec, EmptyExec))
+                        )),
+                    MenuItem.default({label: "Export", selectable: service.hasProfile})
+                        .setRuntimeChildrenProcedure(parent => parent.addMenuItem(
+                            MenuItem.default({label: "Mixdown...", selectable: service.hasProfile})
+                                .setTriggerProcedure(() => service.exportMixdown()),
+                            MenuItem.default({label: "Stems...", selectable: service.hasProfile})
+                                .setTriggerProcedure(() => service.exportStems()),
+                            MenuItem.default({label: "Other audio formats...", selectable: service.hasProfile})
+                                .setTriggerProcedure(() => service.exportWithFormat()),
+                            MenuItem.default({label: "DAWproject...", selectable: service.hasProfile})
+                                .setTriggerProcedure(async () => service.exportDawproject()),
+                            MenuItem.default({
+                                label: "JSON...",
+                                selectable: service.hasProfile,
+                                hidden: !Browser.isLocalHost()
+                            }).setTriggerProcedure(async () => {
+                                const arrayBuffer = new TextEncoder().encode(JSON.stringify(
+                                    service.project.boxGraph.toJSON(), null, 2)).buffer
+                                await Files.save(arrayBuffer, {
+                                    types: [FilePickerAcceptTypes.JsonFileType],
+                                    suggestedName: "project.json"
+                                })
+                            }),
+                            MenuItem.default({
+                                label: "Video...",
+                                selectable: service.hasProfile
+                            }).setTriggerProcedure(async () => Promises.tryCatch(VideoRenderer.render(
+                                service.project, service.profile.meta.name, service.project.engine.sampleRate)))
+                        )),
+                    MenuItem.default({
+                        label: "Join Live Room...",
+                        icon: IconSymbol.Connected,
+                        separatorBefore: true
+                    }).setTriggerProcedure(() => connectRoom(service)),
+                    MenuItem.default({
+                        label: "Show MIDI-Keyboard",
+                        icon: IconSymbol.Piano,
+                        separatorBefore: true,
+                        shortcut: GlobalShortcuts["toggle-software-keyboard"].shortcut.format(),
+                        checked: service.isSoftwareKeyboardVisible()
+                    }).setTriggerProcedure(() => service.toggleSoftwareKeyboard()),
+                    MenuItem.default({
+                        label: "Backup",
+                        icon: IconSymbol.CloudFolder,
+                        separatorBefore: true
+                    }).setRuntimeChildrenProcedure(parent => {
+                        parent.addMenuItem(
+                            MenuItem.default({
+                                label: "Dropbox",
+                                icon: IconSymbol.Dropbox
+                            }).setTriggerProcedure(() =>
+                                CloudBackup.backup(service.cloudAuthManager, "Dropbox").catch(EmptyExec)),
+                            MenuItem.default({
+                                label: "GoogleDrive",
+                                icon: IconSymbol.GoogleDrive
+                            }).setTriggerProcedure(() =>
+                                CloudBackup.backup(service.cloudAuthManager, "GoogleDrive").catch(EmptyExec)),
+                            MenuItem.default({label: "Help", icon: IconSymbol.Help, separatorBefore: true})
+                                .setTriggerProcedure(() => openManual("/manuals/cloud-backup"))
+                        )
+                    }),
+                    MenuItem.default({
+                        label: "Nextcloud",
+                        icon: IconSymbol.Nextcloud
+                    }).setRuntimeChildrenProcedure(parent => {
+                        parent.addMenuItem(
+                            MenuItem.default({label: "Browse projects..."})
+                                .setTriggerProcedure(() => NextcloudDialogs.browse(service)),
+                            MenuItem.default({label: "Upload project...", selectable: service.hasProfile})
+                                .setTriggerProcedure(() => NextcloudDialogs.save(service)),
+                            MenuItem.default({label: "Help", icon: IconSymbol.Help, separatorBefore: true})
+                                .setTriggerProcedure(() => openManual("/manuals/nextcloud"))
+                        )
+                    }),
+                    MenuItem.default({
+                        label: "Script Editor",
+                        separatorBefore: true,
+                        icon: IconSymbol.Code
+                    }).setTriggerProcedure(() => RouteLocation.get().navigateTo("/scripting")),
+                    MenuItem.default({
+                        label: "Preferences",
+                        shortcut: GlobalShortcuts["show-preferences"].shortcut.format(),
+                        separatorBefore: true,
+                        icon: IconSymbol.System
+                    }).setTriggerProcedure(() => RouteLocation.get().navigateTo("/preferences")),
+                    MenuItem.default({
+                        label: "Storage",
+                        icon: IconSymbol.Folder
+                    }).setTriggerProcedure(() => RouteLocation.get().navigateTo("/storage")),
+                    MenuItem.default({
+                        label: "Statistics",
+                        icon: IconSymbol.Charts
+                    }).setTriggerProcedure(() => RouteLocation.get().navigateTo("/stats")),
+                    createDebugMenu(service)
+                )
+            }
+        )
+}

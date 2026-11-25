@@ -1,0 +1,62 @@
+@use "@/mixins"
+
+component
+  @include mixins.ControlLayout(7)
+
+  > .default-screen
+    position: relative
+
+    > svg
+      top: 0
+      left: 0
+      width: 100%
+      height: 100%
+      position: absolute
+
+    > canvas
+      top: 1em
+      left: 1em
+      width: calc(100% - 2em)
+      height: calc(100% - 2em)
+      position: absolute
+
+    > div.switches
+      margin: 0 0 0 1em
+      display: flex
+      flex-direction: row
+      justify-content: space-between
+      padding: 0 calc(1em + 2px)
+      font-size: 0.75em
+      width: 95%
+      height: min-content
+      position: absolute
+      bottom: -0.375em
+
+
+  .ft-eq-handles
+    position: absolute
+    inset: 1em
+    pointer-events: none
+    button
+      position: absolute
+      transform: translate(-50%, -50%)
+      width: 14px
+      height: 14px
+      padding: 0
+      display: grid
+      place-items: center
+      background: #181c23
+      border: 1px solid var(--band-color)
+      color: var(--band-color)
+      border-radius: 100%
+      font: bold 9px/1 ui-monospace, monospace
+      touch-action: none
+      pointer-events: auto
+      cursor: grab
+      &[data-enabled=true]
+        background: var(--band-color)
+        color: #111720
+      &:active
+        cursor: grabbing
+      &:focus-visible
+        outline: 2px solid white

@@ -1,0 +1,52 @@
+import {clipAtSharedTitle} from "@/flowtu/playback-lanes"
+import {RegionLabel} from "@/ui/timeline/RegionLabel"
+import {TimelineCoordinates, TimelineSelectableLocator} from "@/ui/timeline/TimelineSelectableLocator.ts"
+import {AnyRegionBoxAdapter} from "@opendaw/studio-adapters"
+import {isDefined, Iterables, Selection} from "@opendaw/lib-std"
+import {TracksManager} from "@/ui/timeline/tracks/audio-unit/TracksManager.ts"
+import {PointerRadiusDistance} from "@/ui/timeline/constants"
+import {AudioUnitFreeze, TimelineRange} from "@opendaw/studio-core"
+
+export const createRegionLocator = (manager: TracksManager,
+                                    range: TimelineRange,
+                                    regionSelection: Selection<AnyRegionBoxAdapter>,
+                                    audioUnitFreeze: AudioUnitFreeze)
+    : TimelineSelectableLocator<AnyRegionBoxAdapter> => ({
+    selectableAt: ({u, v}: TimelineCoordinates): Iterable<AnyRegionBoxAdapter> => {
+        const tracks = manager.tracks()
+        const index = manager.localToIndex(v)
+        if (index < 0 || index >= tracks.length) {return Iterables.empty()}
+        const component = tracks[index]
+        // `localToIndex` floors to the nearest track above `v`; a `v` past that track's bottom sits in a band
+        // no TrackContext covers (a synthetic unit lane). Grabbing that track's region there stops a marquee
+        // from ever starting on a synthetic lane. Nothing is selectable in the gap.
+        if (v >= component.position + component.size) {return Iterables.empty()}
+        if (component.audioUnitBoxAdapter.mapOr(unit => audioUnitFreeze.isFrozen(unit), false)) {
+            return Iterables.empty()
+        }
+        const threshold = range.unitsPerPixel * PointerRadiusDistance
+        const lanes = manager.playbackLanes(component.trackBoxAdapter)
+        const candidates = lanes.flatMap(t => [...t.regions.collection.iterateRange(u-threshold, u+threshold)])
+        const title = v < component.position + RegionLabel.labelHeight() ? clipAtSharedTitle(candidates, u) : null
+        const hit = title ?? candidates.reverse().find(r => r.position <= u && u < r.complete) ?? candidates[0]
+        if (isDefined(hit)) {return Iterables.one(hit)}
+        return Iterables.empty()
+    },
+    selectablesBetween: ({u: u0, v: v0}, {u: u1, v: v1}): Iterable<AnyRegionBoxAdapter> => {
+        const tracks = manager.tracks()
+        const startIndex = manager.localToIndex(v0)
+        if (startIndex < 0 || startIndex >= tracks.length) {return Iterables.empty()}
+        const regions: Array<AnyRegionBoxAdapter> = []
+        for (let index = startIndex; index < tracks.length; index++) {
+            const component = tracks[index]
+            if (component.position >= v1) {break}
+            // The start track can sit entirely above the drag (its band ends before `v0` — a synthetic gap):
+            // its rows are outside the rectangle, so skip it.
+            if (component.position + component.size <= v0) {continue}
+            if (component.audioUnitBoxAdapter.mapOr(unit => audioUnitFreeze.isFrozen(unit), false)) {continue}
+            for (const lane of manager.playbackLanes(component.trackBoxAdapter)) {regions.push(...lane.regions.collection.iterateRange(u0, u1))}
+        }
+        return regions
+    },
+    selectable: (): Iterable<AnyRegionBoxAdapter> => regionSelection.selected()
+})

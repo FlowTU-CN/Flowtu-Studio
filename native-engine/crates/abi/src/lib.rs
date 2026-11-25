@@ -1,0 +1,1864 @@
+//! The device boundary shim — the ONE place that holds `unsafe` in the device path. It turns the
+//! host-assigned shared-memory descriptor (raw byte offsets) into safe Rust slices and typed state,
+//! so device DSP code is written entirely in safe Rust.
+//!
+//! Canonical descriptor (u32 words); every offset is a byte address into the shared linear memory:
+//!   [0]  frames
+//!   [1]  in_count       [2]  in_offsets_ptr   (-> u32[in_count],  each -> f32[frames])
+//!   [3]  out_count      [4]  out_offsets_ptr  (-> u32[out_count], each -> f32[frames])
+//!   [5]  param_count    [6]  params_ptr       (-> f32[param_count])
+//!   [7]  state_ptr      (-> device instance state)
+//!   [8]  in_event_cap   [9]  in_events_ptr    (-> EventRecord[in_event_cap]; a device-owned SCRATCH the
+//!                                              device's `host_pull_events` pull WRITES into, NOT pre-filled)
+//!   [10] out_event_cap  [11] out_events_ptr   (-> EventRecord[out_event_cap]; a MIDI-fx pull RESPONSE
+//!                                              buffer, event-output devices only; 0 for instruments/effects)
+//!   [12] block_count    [13] blocks_ptr       (-> Block[block_count]; the quantum's ProcessInfo)
+//!   [14] sample_rate (f32 bits)               (the engine's render sample rate; passed in, never a global)
+//!
+//! An effect's audio inputs are NOT in the descriptor: they are resolved by PORT id through the
+//! `host_resolve_input` import (Route B/C), the through-signal at `MAIN_INPUT` and each `bind_sidechain`
+//! port at `2, 3, ...`, exactly as a sampler resolves a sample handle.
+//!
+//! The engine no longer PUSHES a resolved event array. A device PULLS its own input event stream for a
+//! pulse range through the `host_pull_events` host import (bound to the engine's export by the loader),
+//! into its `[8]/[9]` scratch, and times its own sub-blocks over the `[12]/[13]` blocks.
+
+#![cfg_attr(not(test), no_std)]
+
+use core::ptr::NonNull;
+use core::slice;
+
+/// One timed note event. CLAP-shaped: a flat, `#[repr(C)]` record read straight from shared memory (no
+/// heap). `kind` is `EVENT_NOTE_ON` / `EVENT_NOTE_OFF`. It carries TWO time fields: `position` is the
+/// pulse position, the currency the MIDI-fx pull chain works in (a groove device warps it, the host
+/// resolves the chain in pulses); `offset` is the sample offset within `[0, frames)`, which the CONSUMER
+/// (an instrument's `render_instrument`) fills from `position` for its DSP. MIDI fx read/write `position`
+/// and leave `offset` to the consumer. `position` first so the `f64` is 8-aligned with no padding.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct EventRecord {
+    pub position: f64,
+    pub offset: u32,
+    pub kind: u32,
+    pub id: u32,
+    pub pitch: u32,
+    pub velocity: f32,
+    pub cent: f32,
+    // The note's length in pulses, on a NOTE_ON only (0 otherwise). An instrument does not need it (it gets a
+    // matching NOTE_OFF), but a MIDI fx exposes it to its user script as the note's `duration` — the script
+    // schedules the transformed note's own note-off from it, so it must travel WITH the note-on (the matching
+    // note-off can be in a later block). `f64` last so it stays 8-aligned with no padding (size 40).
+    pub duration: f64
+}
+
+pub const EVENT_NOTE_ON: u32 = 0;
+pub const EVENT_NOTE_OFF: u32 = 1;
+/// A parameter-automation update (Route D): clock-driven, merged into the pulled stream. `pitch` carries
+/// the parameter index, `velocity` the new value. At an equal position the device-SDK applies it between
+/// note-off and note-on (see the engine's event ordering), so a note starting there sees the new value.
+pub const EVENT_PARAM: u32 = 2;
+/// A choke: force-release all of the receiving instrument's voices fast (the 5 ms ramp), click-free. The
+/// composite tags a note-on as a choke for the sibling slots in a note-on's choke group (event-tagging, not
+/// inter-slot firing); the slot's `handle_event` treats it as a forced release. Carried in the event stream
+/// like a note event, so it is sample-accurate via the same sub-block split.
+pub const EVENT_CHOKE: u32 = 3;
+
+/// What a device IS, so the host knows how to wire it into the graph (it reads this from the device's
+/// `kind` export at load). An instrument voices notes into audio; an effect transforms an input buffer; a
+/// MIDI effect is a pull source that transforms an upstream event stream (no audio, exports
+/// `process_events` instead of `process`).
+pub const DEVICE_KIND_INSTRUMENT: u32 = 0;
+pub const DEVICE_KIND_AUDIO_EFFECT: u32 = 1;
+pub const DEVICE_KIND_MIDI_EFFECT: u32 = 2;
+
+/// Per-block transport flags (`BlockFlag` in TS, core-processors `processing.ts`), shared by the host and
+/// devices. State flags (`TRANSPORTING`, `PLAYING`) persist across a block's sub-chunks; event flags
+/// (`DISCONTINUOUS`, `BPM_CHANGED`) are one-shot, cleared after the first chunk via `EVENT_MASK`.
+/// `#[repr(transparent)]` so it is layout-identical to a `u32`: it is the `Block.flags` wire field AND
+/// carries the host's flag helpers. `DISCONTINUOUS` marks a transport jump (loop wrap / seek), the cue for
+/// a stateful device to release what it holds.
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct BlockFlags(pub u32);
+
+impl BlockFlags {
+    pub const TRANSPORTING: u32 = 1 << 0;
+    pub const DISCONTINUOUS: u32 = 1 << 1;
+    pub const PLAYING: u32 = 1 << 2;
+    pub const BPM_CHANGED: u32 = 1 << 3;
+    pub const EVENT_MASK: u32 = Self::DISCONTINUOUS | Self::BPM_CHANGED;
+
+    /// Mirror of TS `BlockFlags.create`.
+    pub fn create(transporting: bool, discontinuous: bool, playing: bool, bpm_changed: bool) -> Self {
+        let mut bits = 0;
+        if transporting { bits |= Self::TRANSPORTING; }
+        if discontinuous { bits |= Self::DISCONTINUOUS; }
+        if playing { bits |= Self::PLAYING; }
+        if bpm_changed { bits |= Self::BPM_CHANGED; }
+        Self(bits)
+    }
+
+    /// True when every bit of `mask` is set (TS `Bits.every`).
+    pub fn has(self, mask: u32) -> bool {
+        self.0 & mask == mask
+    }
+
+    pub fn transporting(self) -> bool {
+        self.has(Self::TRANSPORTING)
+    }
+
+    pub fn playing(self) -> bool {
+        self.has(Self::PLAYING)
+    }
+
+    pub fn discontinuous(self) -> bool {
+        self.has(Self::DISCONTINUOUS)
+    }
+
+    pub fn bpm_changed(self) -> bool {
+        self.has(Self::BPM_CHANGED)
+    }
+
+    /// Clear the one-shot event flags after the first chunk (TS `flags &= ~eventMask`).
+    pub fn clear_event_flags(&mut self) {
+        self.0 &= !Self::EVENT_MASK;
+    }
+}
+
+/// One render block of the quantum's `ProcessInfo`: a pulse range `[p0, p1)` mapped to the sample range
+/// `[s0, s1)` at `bpm`, with transport `flags`. The ONE block type shared by the host (engine processors)
+/// and devices, read straight from shared memory. `#[repr(C)]` with the two leading `u32`s before the
+/// `f64`s so `p0`/`p1` stay 8-aligned (no implicit padding mid-struct); `s0`/`s1` are sample indices as
+/// `u32` (the host casts to `usize` to slice). A device pulls each block's events with
+/// `pull_events(p0, p1, flags, ...)` and may honour `[s0, s1)` for sub-block timing or ignore it.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct Block {
+    pub index: u32,
+    pub flags: BlockFlags,
+    pub p0: f64,
+    pub p1: f64,
+    pub s0: u32,
+    pub s1: u32,
+    pub bpm: f32
+}
+
+// The host resolves this device's input note/param events for a pulse range on demand (Route A pull).
+// The device imports it from `env`; the worklet loader binds it to the engine's `host_pull_events`
+// export, so the call is wasm-to-wasm. It writes resolved `EventRecord`s into the device's scratch and
+// returns the count written (capped at `max`).
+#[cfg(target_family = "wasm")]
+#[link(wasm_import_module = "env")]
+extern "C" {
+    fn host_pull_events(from: f64, to: f64, flags: u32, out_ptr: u32, max: u32) -> u32;
+    fn host_pulse_to_offset(pulse: f64) -> u32;
+    fn host_bind_parameter(path_ptr: u32, path_len: u32) -> u32;
+    fn host_bind_broadcast(path_ptr: u32, path_len: u32, len: u32, package_type: u32) -> u32;
+    fn host_broadcast_ptr(id: u32) -> u32;
+    fn host_broadcast_active(id: u32) -> u32;
+    fn host_update_parameters(position: f64, out_ptr: u32, max: u32) -> u32;
+    fn host_first_update_position(at: f64) -> f64;
+    fn host_next_update_position(after: f64) -> f64;
+    fn host_resolve_sample(handle: u32, out_ptr: u32) -> u32;
+    fn host_observe_sample(path_ptr: u32, path_len: u32) -> u32;
+    fn host_resolve_soundfont(handle: u32, out_ptr: u32) -> u32;
+    fn host_observe_soundfont(path_ptr: u32, path_len: u32) -> u32;
+    fn host_observe_field(path_ptr: u32, path_len: u32) -> u32;
+    fn host_observe_target_string(path_ptr: u32, path_len: u32, field_key: u32) -> u32;
+    fn host_bind_sidechain(path_ptr: u32, path_len: u32) -> u32;
+    fn host_resolve_input(id: u32, out_ptr: u32) -> u32;
+    fn host_base_frequency() -> f32;
+    fn host_set_latency(frames: u32);
+    // NAM BRIDGE (NeuralAmp only). JS closures the loader binds into `env` (script-bridge style): the DSP is
+    // the `@opendaw/nam-wasm` Emscripten module (NeuralAmpModelerCore) instantiated NEXT TO the engine in the
+    // worklet; the bridge copies each chunk between the two memories. See the `nam_*` wrappers below.
+    fn host_nam_create(uuid_ptr: u32) -> u32;
+    fn host_nam_load(handle: u32, json_ptr: u32, json_len: u32);
+    fn host_nam_set_mono(handle: u32, mono: u32);
+    fn host_nam_process(handle: u32, in0_ptr: u32, in1_ptr: u32, out0_ptr: u32, out1_ptr: u32, frames: u32, channels: u32) -> u32;
+    fn host_nam_reset(handle: u32);
+    // Release the bridge's JS-side nam instance(s) when THIS device's instance dies (a genuine removal, never
+    // a chain-edit survivor). Without this the bridge kept the instance(s) alive forever (freed only by the
+    // mono/stereo toggle's own instance drop).
+    fn host_nam_release(handle: u32);
+    // WCLAP BRIDGE (Wclap only): a CLAP plugin instance hosted in JS next to the engine, see `wclap_*` below.
+    fn host_wclap_create(uuid_ptr: u32) -> u32;
+    fn host_wclap_load(handle: u32, url_ptr: u32, url_len: u32, id_ptr: u32, id_len: u32);
+    fn host_wclap_process(handle: u32, in0_ptr: u32, in1_ptr: u32, out0_ptr: u32, out1_ptr: u32, frames: u32,
+                          bpm: f32, position: f64, flags: u32) -> u32;
+    fn host_wclap_input(handle: u32, index: u32, left_ptr: u32, right_ptr: u32, frames: u32);
+    fn host_wclap_note(handle: u32, on: u32, key: u32, velocity: f32);
+    fn host_wclap_param(handle: u32, clap_param_id: u32, kind: u32, value: f32, modulation: f32);
+    fn host_wclap_state(handle: u32, base64_ptr: u32, base64_len: u32);
+    fn host_wclap_reset(handle: u32);
+    fn host_wclap_latency(handle: u32) -> u32;
+    fn host_wclap_release(handle: u32);
+    // SCRIPT BRIDGE (Werkstatt / Apparat / Spielwerk only). `host_self_uuid` is an engine export like the rest;
+    // the `host_script_*` family are JS closures the loader binds into `env` (see the `script_*` wrappers below).
+    fn host_self_uuid(out16_ptr: u32);
+    fn host_script_create(uuid_ptr: u32, kind: u32, state_ptr: u32) -> u32;
+    fn host_script_audio(handle: u32, src_l: u32, src_r: u32, out_l: u32, out_r: u32,
+                         s0: u32, s1: u32, index: u32, p0: f64, p1: f64, bpm: f32, flags: u32) -> u32;
+    fn host_script_note_on(handle: u32, pitch: u32, velocity: f32, cent: f32, id: u32);
+    fn host_script_note_off(handle: u32, id: u32);
+    fn host_script_reset(handle: u32);
+    fn host_script_param(handle: u32, index: u32, kind: u32, value: f32, modulation: f32);
+    fn host_script_sample(handle: u32, index: u32, sample_handle: u32, present: u32);
+    fn host_script_notes(handle: u32, in_ptr: u32, in_count: u32, out_ptr: u32, out_max: u32,
+                         from: f64, to: f64, bpm: f32, flags: u32, s0: u32, s1: u32) -> u32;
+    // Release the bridge (its Processor instance + limiter + runtime) when THIS device's instance dies (a
+    // genuine removal, never a chain-edit survivor). Without this every rebind orphaned a bridge (no uuid
+    // dedup on create either — see the JS side).
+    fn host_script_release(handle: u32);
+    fn host_script_latency(handle: u32) -> u32;
+    // WASM CONTRACT: one `@collection` snapshot (f32 record-major, NaN = no value box); collection u32::MAX resets all
+    fn host_script_data(handle: u32, collection: u32, ptr: u32, records: u32, fields: u32);
+    // PANIC deposit: copies a device panic's message into the ENGINE's readable panic buffer (the engine
+    // export `host_panic`), so the worklet can name the trap after catching the RuntimeError.
+    fn host_panic(msg_ptr: u32, msg_len: u32);
+}
+
+/// The shared device panic-handler body: format the panic (message + location) into a stack buffer, deposit
+/// it in the engine's panic buffer via `host_panic`, then TRAP — an observable RuntimeError the worklet can
+/// report, never `loop {}` (a silent audio-thread hang). Each device's `#[panic_handler]` delegates here.
+#[cfg(target_family = "wasm")]
+pub fn panic_to_host(info: &core::panic::PanicInfo) -> ! {
+    struct StackWriter {
+        buffer: [u8; 256],
+        written: usize
+    }
+    impl core::fmt::Write for StackWriter {
+        fn write_str(&mut self, text: &str) -> core::fmt::Result {
+            let bytes = text.as_bytes();
+            let count = bytes.len().min(self.buffer.len() - self.written);
+            self.buffer[self.written..self.written + count].copy_from_slice(&bytes[..count]);
+            self.written += count;
+            Ok(()) // truncate silently; a clipped message still names the panic
+        }
+    }
+    use core::fmt::Write;
+    let mut writer = StackWriter {buffer: [0; 256], written: 0};
+    let _ = write!(writer, "{}", info); // Display = "panicked at <file>:<line>: <message>"
+    unsafe { host_panic(writer.buffer.as_ptr() as u32, writer.written as u32); }
+    core::arch::wasm32::unreachable()
+}
+
+/// Pull this device's resolved input events for the pulse range `[from, to)` into `out`, returning the
+/// number written (offsets are absolute within the quantum, lifecycle-sorted). On native builds there is
+/// no host, so the stub returns 0 (native device tests drive `render` directly, never `process`).
+#[inline]
+pub fn pull_events(from: f64, to: f64, flags: u32, out: &mut [EventRecord]) -> usize {
+    #[cfg(target_family = "wasm")]
+    { unsafe { host_pull_events(from, to, flags, out.as_mut_ptr() as u32, out.len() as u32) as usize } }
+    #[cfg(not(target_family = "wasm"))]
+    { let _ = (from, to, flags, out.len()); 0 }
+}
+
+/// Map a pulse position to its sample offset within the current quantum (the host resolves it against the
+/// block containing `pulse`). A generative device (e.g. an arpeggiator placing notes on a rate grid) uses
+/// this to time the events it emits. Native stub returns 0.
+#[inline]
+pub fn pulse_to_offset(pulse: f64) -> u32 {
+    #[cfg(target_family = "wasm")]
+    { unsafe { host_pulse_to_offset(pulse) } }
+    #[cfg(not(target_family = "wasm"))]
+    { let _ = pulse; 0 }
+}
+
+// The native tuning reference behind `base_frequency` (f32 bits), settable so a device test can assert
+// that a changed base shifts the voice pitch; wasm builds ask the engine instead.
+#[cfg(not(target_family = "wasm"))]
+static NATIVE_BASE_FREQUENCY: core::sync::atomic::AtomicU32 =
+    core::sync::atomic::AtomicU32::new(0x43DC_0000); // 440.0f32
+
+/// The project's TUNING REFERENCE in Hz (TS `EngineContext.baseFrequency`, `RootBox.baseFrequency`), pulled
+/// from the host. A device reads it exactly where its TS counterpart reads `context.baseFrequency` — the
+/// Vaporisateur per note-on (`computeFrequency`), never mid-voice. Native builds serve the test-settable
+/// default (440).
+#[inline]
+pub fn base_frequency() -> f32 {
+    #[cfg(target_family = "wasm")]
+    { unsafe { host_base_frequency() } }
+    #[cfg(not(target_family = "wasm"))]
+    { f32::from_bits(NATIVE_BASE_FREQUENCY.load(core::sync::atomic::Ordering::Relaxed)) }
+}
+
+/// WASM CONTRACT: report the frames this device delays its output by, from `init`, `parameter_changed` or `process`.
+#[inline]
+pub fn set_latency(frames: u32) {
+    #[cfg(target_family = "wasm")]
+    unsafe { host_set_latency(frames) }
+    #[cfg(not(target_family = "wasm"))]
+    NATIVE_LATENCY.store(frames, core::sync::atomic::Ordering::Relaxed);
+}
+
+#[cfg(not(target_family = "wasm"))]
+static NATIVE_LATENCY: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+
+/// Native TEST SEAM: the latency the last [`set_latency`] call reported.
+#[cfg(not(target_family = "wasm"))]
+pub fn native_latency() -> u32 {
+    NATIVE_LATENCY.load(core::sync::atomic::Ordering::Relaxed)
+}
+
+/// Native TEST SEAM: set what [`base_frequency`] returns (a device test detunes, then restores 440).
+#[cfg(not(target_family = "wasm"))]
+pub fn set_native_base_frequency(hz: f32) {
+    NATIVE_BASE_FREQUENCY.store(hz.to_bits(), core::sync::atomic::Ordering::Relaxed);
+}
+
+/// The kind tag carried beside a [`ParamChange`]'s `value`, telling the SDK how to read that one f32: `UNIT`
+/// is the uniform `0..1` automation value to MAP; `INT`/`FLOAT`/`BOOL` are a box field's already-real value of
+/// that primitive type (a UI edit / un-automated default), the f32 carrying it losslessly for any realistic
+/// parameter. The SDK turns `(kind, value)` into a typed [`ParamValue`], so devices never inspect the tag.
+pub const PARAM_KIND_UNIT: u32 = 0;
+pub const PARAM_KIND_INT: u32 = 1;
+pub const PARAM_KIND_FLOAT: u32 = 2;
+pub const PARAM_KIND_BOOL: u32 = 3;
+
+/// One resolved parameter change the host hands back from [`update_parameters`]: the parameter's `id` (the
+/// value [`bind_parameter`] returned), a `kind` tag (`PARAM_KIND_*`), the new `value` as a single f32, and the
+/// summed `modulation` in NORMALIZED space (NaN = none). `#[repr(C)]` so the host writes it straight into the
+/// scratch; the two `u32`s precede the f32s and everything is 4-aligned with no padding.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct ParamChange {
+    pub id: u32,
+    pub kind: u32,
+    pub value: f32,
+    pub modulation: f32
+}
+
+/// A parameter value handed to a device's `parameter_changed`, ALREADY TYPED so device code never casts or
+/// reads a raw tag. The analog of lib-std's typed `ValueMapping<Y>` outputs: `Unit` is the uniform `0..1`
+/// automation value the device maps with its OWN mapping; `Int` / `Float` / `Bool` are a box field's
+/// already-real value (a UI edit / un-automated default) to use directly. The SDK builds this from a
+/// [`ParamChange`]'s wire `(kind, value, modulation)` via [`ParamValue::from_wire`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ParamValue {
+    Unit(f32),
+    Int(i32),
+    Float(f32),
+    Bool(bool),
+    /// The `base` (`kind` says how to read it) plus the modulation in NORMALIZED space. Only the device knows
+    /// the mapping, so the resolvers below fold them; device code goes through those, never this variant.
+    Modulated {base: f32, kind: u32, sum: f32}
+}
+
+impl ParamValue {
+    /// Decode the wire `(kind, value, modulation)` into a typed value. The ONE numeric conversion of an
+    /// f32-carried real value to its primitive type lives here, once, so device code stays cast-free. Panics
+    /// on an unknown kind: the engine and SDK are the only writers, so that can only be a contract drift.
+    #[inline]
+    pub fn from_wire(kind: u32, value: f32, modulation: f32) -> Self {
+        if !modulation.is_nan() {
+            return ParamValue::Modulated {base: value, kind, sum: modulation};
+        }
+        match kind {
+            PARAM_KIND_UNIT => ParamValue::Unit(value),
+            PARAM_KIND_INT => ParamValue::Int(value as i32),
+            PARAM_KIND_FLOAT => ParamValue::Float(value),
+            PARAM_KIND_BOOL => ParamValue::Bool(value != 0.0),
+            _ => panic!("unknown parameter kind")
+        }
+    }
+}
+
+
+/// Resolve a FLOAT parameter: a uniform automation value mapped through `mapping`, a real `Float` used
+/// directly, or a `Modulated` base + sum folded in NORMALIZED space and mapped back. PANICS on an `Int` /
+/// `Bool` wire — a float parameter never carries those, so it can only be a contract drift.
+#[inline]
+pub fn float_value<M: math::value_mapping::ValueMapping<f32>>(value: ParamValue, mapping: &M) -> f32 {
+    match value {
+        ParamValue::Unit(unit) => mapping.y(unit),
+        ParamValue::Float(real) => real,
+        ParamValue::Modulated {base, kind, sum} => {
+            let unit = if kind == PARAM_KIND_UNIT { base } else { mapping.x(base) };
+            mapping.y(math::clamp_unit(unit + sum))
+        }
+        ParamValue::Int(_) | ParamValue::Bool(_) => panic!("expected a float parameter")
+    }
+}
+
+/// Resolve an INT parameter: a uniform automation value mapped through `mapping`, a real `Int` value, or a
+/// `Modulated` base + sum folded in NORMALIZED space. PANICS on a `Float` / `Bool` wire.
+#[inline]
+pub fn int_value<M: math::value_mapping::ValueMapping<i32>>(value: ParamValue, mapping: &M) -> i32 {
+    match value {
+        ParamValue::Unit(unit) => mapping.y(unit),
+        ParamValue::Int(real) => real,
+        ParamValue::Modulated {base, kind, sum} => {
+            let unit = if kind == PARAM_KIND_UNIT { base } else { mapping.x(base as i32) };
+            mapping.y(math::clamp_unit(unit + sum))
+        }
+        ParamValue::Float(_) | ParamValue::Bool(_) => panic!("expected an int parameter")
+    }
+}
+
+/// The UNIT value (`0..1`) rather than the real one, for a device that maps it itself later (TS `getUnitValue`).
+#[inline]
+pub fn unit_value<M: math::value_mapping::ValueMapping<f32>>(value: ParamValue, mapping: &M) -> f32 {
+    match value {
+        ParamValue::Unit(unit) => unit,
+        ParamValue::Float(real) => mapping.x(real),
+        ParamValue::Int(real) => mapping.x(real as f32),
+        ParamValue::Bool(flag) => if flag {1.0} else {0.0},
+        ParamValue::Modulated {base, kind, sum} => {
+            let unit = if kind == PARAM_KIND_UNIT { base } else { mapping.x(base) };
+            math::clamp_unit(unit + sum)
+        }
+    }
+}
+
+/// Resolve a BOOL parameter: a uniform automation value (true at / above the halfway point), a real `Bool`,
+/// or a `Modulated` base + sum folded in NORMALIZED space and thresholded the same way. PANICS on an `Int` /
+/// `Float` wire.
+#[inline]
+pub fn bool_value(value: ParamValue) -> bool {
+    match value {
+        ParamValue::Unit(unit) => unit >= 0.5,
+        ParamValue::Bool(flag) => flag,
+        ParamValue::Modulated {base, kind, sum} => {
+            let unit = if kind == PARAM_KIND_UNIT { base } else if base != 0.0 { 1.0 } else { 0.0 };
+            math::clamp_unit(unit + sum) >= 0.5
+        }
+        ParamValue::Int(_) | ParamValue::Float(_) => panic!("expected a bool parameter")
+    }
+}
+
+pub const FIELD_KIND_INT: u32 = 0;
+pub const FIELD_KIND_FLOAT: u32 = 1;
+pub const FIELD_KIND_BOOL: u32 = 2;
+pub const FIELD_KIND_STRING: u32 = 3;
+pub const FIELD_KIND_INT_ARRAY: u32 = 4;
+
+/// A PLAIN box-field value handed to a device's [`Instrument::field_changed`], ALREADY TYPED (the analog of
+/// [`ParamValue`] for observed fields, not parameters). Mirrors the box graph's field primitives one-to-one:
+/// `Int` / `Float` / `Bool`, and `String` as a `&str` borrowed from the shared linear memory for the duration
+/// of the call (the device must copy it if it keeps it; it is NOT valid after `field_changed` returns). The
+/// SDK builds this from the wire `(kind, bits, len)` via [`FieldValue::from_wire`]. A device matches the
+/// variant it expects and PANICS on any other, never coercing.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum FieldValue<'a> {
+    Int(i32),
+    Float(f32),
+    Bool(bool),
+    String(&'a str),
+    Ints(&'a [i32])
+}
+
+impl<'a> FieldValue<'a> {
+    /// Decode the wire `(kind, bits, len)`: `bits` carries the numeric value's raw bits, or (for a string) the
+    /// pointer to its UTF-8 bytes in the shared memory with `len` their length. Panics on an unknown kind or
+    /// invalid UTF-8 (the engine is the only writer, so either is a contract drift, never live input).
+    ///
+    /// # Safety
+    /// For a string, `bits`/`len` must point at `len` valid, initialized UTF-8 bytes that stay alive and
+    /// unmoved for the whole call. The engine guarantees this (it passes a live box-field string).
+    #[inline]
+    pub unsafe fn from_wire(kind: u32, bits: u32, len: u32) -> Self {
+        match kind {
+            FIELD_KIND_INT => FieldValue::Int(bits as i32),
+            FIELD_KIND_FLOAT => FieldValue::Float(f32::from_bits(bits)),
+            FIELD_KIND_BOOL => FieldValue::Bool(bits != 0),
+            FIELD_KIND_STRING => {
+                let bytes = slice::from_raw_parts(bits as *const u8, len as usize);
+                FieldValue::String(core::str::from_utf8(bytes).expect("field string is not valid UTF-8"))
+            }
+            FIELD_KIND_INT_ARRAY => FieldValue::Ints(slice::from_raw_parts(bits as *const i32, len as usize)),
+            _ => panic!("unknown field kind")
+        }
+    }
+}
+
+/// A resolved sample (Route F): decoded PLANAR f32 frames resident in the shared linear memory. `frames_ptr`
+/// points at channel 0's frames; channel `c` is at `frames_ptr + c * frame_count * 4` (each plane is
+/// `frame_count` consecutive f32). The host fills this from a sample handle via [`resolve_sample`]; a handle
+/// that is not yet resident resolves to `None`. `#[repr(C)]` so the engine writes it straight into the
+/// device's out pointer.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SampleRef {
+    pub frames_ptr: u32,
+    pub frame_count: u32,
+    pub channel_count: u32,
+    pub sample_rate: f32
+}
+
+impl SampleRef {
+    /// The PLANAR frames of `channel` (0-based) as a safe slice (`frame_count` f32 at
+    /// `frames_ptr + channel * frame_count * 4`). The one `unsafe` stays here in the shim; device DSP reads
+    /// frames as a slice. The slice borrows the resident sample memory, valid while the sample stays resident.
+    #[inline]
+    pub fn plane(&self, channel: u32) -> &[f32] {
+        #[cfg(target_family = "wasm")]
+        {
+            let offset = self.frames_ptr as usize + channel as usize * self.frame_count as usize * 4;
+            unsafe { slice::from_raw_parts(offset as *const f32, self.frame_count as usize) }
+        }
+        #[cfg(not(target_family = "wasm"))]
+        { native_samples::plane(self.frames_ptr, channel, self.frame_count) }
+    }
+}
+
+/// Resolve a sample `handle` (Route F) to its resident PLANAR frames, or `None` when not yet resident (the
+/// device skips that sample for the block). The host writes a [`SampleRef`] into an on-stack scratch and
+/// returns 1 when resident. Native builds serve the test registry ([`set_native_sample`]), `None` for an
+/// unregistered handle.
+#[inline]
+pub fn resolve_sample(handle: u32) -> Option<SampleRef> {
+    #[cfg(target_family = "wasm")]
+    {
+        let mut out = SampleRef {frames_ptr: 0, frame_count: 0, channel_count: 0, sample_rate: 0.0};
+        if unsafe { host_resolve_sample(handle, &mut out as *mut SampleRef as u32) } != 0 {
+            Some(out)
+        } else {
+            None
+        }
+    }
+    #[cfg(not(target_family = "wasm"))]
+    { native_samples::resolve(handle) }
+}
+
+/// Native TEST SEAM: make `handle` (1-based, at most [`NATIVE_SAMPLE_SLOTS`]) resolve to `planar`, `channel_count`
+/// consecutive planes of `planar.len() / channel_count` frames at `sample_rate`, so a device test can drive
+/// the real sample path (`observe_sample` -> `sample_changed` -> `resolve_sample` -> `plane`). The registry is
+/// process-wide: parallel tests take distinct handles.
+#[cfg(not(target_family = "wasm"))]
+pub fn set_native_sample(handle: u32, planar: &'static [f32], channel_count: u32, sample_rate: f32) {
+    native_samples::set(handle, planar, channel_count, sample_rate)
+}
+
+/// Native TEST SEAM: forget `handle`, so it resolves to `None` again (a sample removed while notes hold).
+#[cfg(not(target_family = "wasm"))]
+pub fn clear_native_sample(handle: u32) {
+    native_samples::clear(handle)
+}
+
+/// How many handles the native sample registry holds.
+#[cfg(not(target_family = "wasm"))]
+pub const NATIVE_SAMPLE_SLOTS: u32 = native_samples::SLOTS as u32;
+
+/// The native sample registry behind [`resolve_sample`] / [`SampleRef::plane`]: on wasm `frames_ptr` is the
+/// resident plane pointer, natively it carries the registered HANDLE and the planes live in `'static` slices
+/// the test leaked. Atomics only, so it stays `no_std`.
+#[cfg(not(target_family = "wasm"))]
+mod native_samples {
+    use core::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+    use super::SampleRef;
+
+    pub const SLOTS: usize = 32;
+    const PTR: AtomicUsize = AtomicUsize::new(0);
+    const ZERO: AtomicU32 = AtomicU32::new(0);
+    static PTRS: [AtomicUsize; SLOTS] = [PTR; SLOTS];
+    static FRAMES: [AtomicU32; SLOTS] = [ZERO; SLOTS];
+    static CHANNELS: [AtomicU32; SLOTS] = [ZERO; SLOTS];
+    static RATES: [AtomicU32; SLOTS] = [ZERO; SLOTS];
+
+    fn slot(handle: u32) -> usize {
+        assert!(handle >= 1 && handle as usize <= SLOTS, "native sample handle out of range: {handle}");
+        handle as usize - 1
+    }
+
+    pub fn set(handle: u32, planar: &'static [f32], channel_count: u32, sample_rate: f32) {
+        assert!(channel_count >= 1, "a sample needs at least one channel");
+        assert_eq!(planar.len() % channel_count as usize, 0, "planar length must be a multiple of the channel count");
+        let index = slot(handle);
+        FRAMES[index].store((planar.len() / channel_count as usize) as u32, Ordering::SeqCst);
+        CHANNELS[index].store(channel_count, Ordering::SeqCst);
+        RATES[index].store(sample_rate.to_bits(), Ordering::SeqCst);
+        PTRS[index].store(planar.as_ptr() as usize, Ordering::SeqCst);
+    }
+
+    pub fn clear(handle: u32) {
+        PTRS[slot(handle)].store(0, Ordering::SeqCst);
+    }
+
+    pub fn resolve(handle: u32) -> Option<SampleRef> {
+        if handle < 1 || handle as usize > SLOTS {
+            return None;
+        }
+        let index = slot(handle);
+        if PTRS[index].load(Ordering::SeqCst) == 0 {
+            return None;
+        }
+        Some(SampleRef {
+            frames_ptr: handle,
+            frame_count: FRAMES[index].load(Ordering::SeqCst),
+            channel_count: CHANNELS[index].load(Ordering::SeqCst),
+            sample_rate: f32::from_bits(RATES[index].load(Ordering::SeqCst))
+        })
+    }
+
+    pub fn plane(handle: u32, channel: u32, frame_count: u32) -> &'static [f32] {
+        let index = slot(handle);
+        let base = PTRS[index].load(Ordering::SeqCst);
+        assert!(base != 0, "native sample {handle} is not registered");
+        assert!(channel < CHANNELS[index].load(Ordering::SeqCst), "channel {channel} out of range");
+        let offset = base + channel as usize * frame_count as usize * core::mem::size_of::<f32>();
+        unsafe { core::slice::from_raw_parts(offset as *const f32, frame_count as usize) }
+    }
+}
+
+/// A resolved SOUNDFONT: a pointer + byte length of the simplified soundfont BLOB resident in the engine's
+/// shared linear memory (built on the main thread from the parsed SF2 — sample table + region table + preset
+/// table + PLANAR-normalized f32 PCM). `#[repr(C)]` so the engine writes it straight into the device's out
+/// pointer, exactly like [`SampleRef`]. The device reads the blob IN PLACE (offset arithmetic, no allocation).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SoundfontRef {
+    pub ptr: u32,
+    pub len: u32
+}
+
+impl SoundfontRef {
+    /// The blob as a safe byte slice. The one `unsafe` stays here in the shim; the device reads scalars out of
+    /// it by fixed offset. Borrows the resident soundfont memory, valid while the soundfont stays resident.
+    #[inline]
+    pub fn bytes(&self) -> &[u8] {
+        unsafe { slice::from_raw_parts(self.ptr as *const u8, self.len as usize) }
+    }
+}
+
+/// Resolve a soundfont `handle` to its resident BLOB (ptr + len), or `None` when not yet resident (the device
+/// stays silent for the note). Mirrors [`resolve_sample`]: the host writes a [`SoundfontRef`] into an on-stack
+/// scratch and returns 1 when resident. Native stub returns `None`.
+#[inline]
+pub fn resolve_soundfont(handle: u32) -> Option<SoundfontRef> {
+    #[cfg(target_family = "wasm")]
+    {
+        let mut out = SoundfontRef {ptr: 0, len: 0};
+        if unsafe { host_resolve_soundfont(handle, &mut out as *mut SoundfontRef as u32) } != 0 {
+            Some(out)
+        } else {
+            None
+        }
+    }
+    #[cfg(not(target_family = "wasm"))]
+    {
+        let _ = handle;
+        None
+    }
+}
+
+/// Observe this device's SOUNDFONT reference by its box pointer-field PATH (e.g. `[10]` for the Soundfont
+/// device's `file`), returning an id the device matches in [`Instrument::soundfont_changed`]. The host tracks
+/// that pointer reactively: on catch-up and whenever it is set / repointed / cleared it resolves the target
+/// `SoundfontFileBox`, requests its simplified blob, and delivers the handle through `soundfont_changed` (a
+/// resident handle, or "unbound"). Mirrors [`observe_sample`]. A device calls this from `init`. Native stub 0.
+#[inline]
+pub fn observe_soundfont(path: &[u16]) -> u32 {
+    #[cfg(target_family = "wasm")]
+    { unsafe { host_observe_soundfont(path.as_ptr() as u32, path.len() as u32) } }
+    #[cfg(not(target_family = "wasm"))]
+    { let _ = path; 0 }
+}
+
+/// Observe this device's sample reference by its box pointer-field PATH (e.g. `[11]` for a Playfield slot's
+/// `file`), returning an id the device matches in [`Instrument::sample_changed`]. The host REACTIVELY tracks
+/// that pointer: on catch-up and whenever it is set / repointed / cleared (inside a transaction, never during
+/// render) it resolves the target to the AudioFileBox, requests its frames (Route F), and delivers the handle
+/// through `sample_changed` (a resident handle, or "unbound" when the pointer has no target). NOT a parameter.
+/// A device calls this from `init`. Native stub returns 0.
+#[inline]
+pub fn observe_sample(path: &[u16]) -> u32 {
+    #[cfg(target_family = "wasm")]
+    { unsafe { host_observe_sample(path.as_ptr() as u32, path.len() as u32) } }
+    #[cfg(not(target_family = "wasm"))]
+    { let _ = path; 0 }
+}
+
+/// Observe one of THIS device's PLAIN box fields by its field-key PATH (e.g. `[15]` for a Playfield slot's
+/// `index`), returning an id the device matches in [`Instrument::field_changed`]. The host `catchup`s the
+/// current value immediately and `subscribe`s for later edits, delivering each through `field_changed` (NEVER
+/// during render, only inside a transaction). This is NOT a parameter: no automation, no mapping, no clock
+/// pull, the device just reads its own field and keeps a copy. A device calls this from `init`. Native stub
+/// returns 0.
+#[inline]
+pub fn observe_field(path: &[u16]) -> u32 {
+    #[cfg(target_family = "wasm")]
+    { unsafe { host_observe_field(path.as_ptr() as u32, path.len() as u32) } }
+    #[cfg(not(target_family = "wasm"))]
+    { let _ = path; 0 }
+}
+
+/// Observe a POINTER field of THIS device by its field-key PATH, delivering the TARGET box's STRING field
+/// `field_key` through [`Instrument::field_changed`] / the effect's `field_changed` as a
+/// [`FieldValue::String`] (an EMPTY string when the pointer is unbound or the target lacks the field).
+/// Returns an id in the SAME id space as [`observe_field`]. The host tracks the pointer reactively: catch-up
+/// and every set / repoint / clear re-resolves the target and re-delivers, only inside a transaction, never
+/// during render. Built for resources that live as a string on a referenced box (the NeuralAmp's model JSON
+/// on its `NeuralAmpModelBox`), but generic: no box name or field key is hardcoded host-side. A device calls
+/// this from `init`. Native stub returns 0.
+#[inline]
+pub fn observe_target_string(path: &[u16], field_key: u16) -> u32 {
+    #[cfg(target_family = "wasm")]
+    { unsafe { host_observe_target_string(path.as_ptr() as u32, path.len() as u32, field_key as u32) } }
+    #[cfg(not(target_family = "wasm"))]
+    { let _ = (path, field_key); 0 }
+}
+
+/// Register one of THIS device's parameters with the host by its stable FIELD-KEY PATH on the device box
+/// (`path`) — e.g. `[16, 10]` for `lowPass.frequency`, the same keys the box schema uses (no encoding).
+/// Returns an opaque `id` the device keeps and matches in `parameter_changed`. A device calls this from its
+/// `init` hook, once per parameter; the host then observes that field's value and any automation track. The
+/// host stays mapping-agnostic — the device maps the uniform automation value itself. Native builds return
+/// [`native_parameter_id`] of the path, so a device test can push each parameter by its field key.
+#[inline]
+pub fn bind_parameter(path: &[u16]) -> u32 {
+    #[cfg(target_family = "wasm")]
+    { unsafe { host_bind_parameter(path.as_ptr() as u32, path.len() as u32) } }
+    #[cfg(not(target_family = "wasm"))]
+    { native_parameter_id(path) }
+}
+
+/// Native TEST SEAM: the id [`bind_parameter`] hands back for `path` on native builds, distinct per field-key
+/// path and never 0, so a test addresses a parameter by the same key the box schema uses.
+#[cfg(not(target_family = "wasm"))]
+pub fn native_parameter_id(path: &[u16]) -> u32 {
+    path.iter().fold(1u32, |id, key| id.wrapping_mul(0x1_0001).wrapping_add(*key as u32))
+}
+
+/// Register a LIVE-DATA broadcast slot for THIS device (call from `init`): `len` floats published to the UI
+/// at the device address + `path` (the TS `context.broadcaster.broadcastFloats(adapter.address.append(...))`
+/// mirror — e.g. the Compressor's editor values at `[0]`, Revamp's spectrum at `[0xFFF]`). Returns the slot
+/// id. The slot memory is engine-owned; fetch its pointer with [`broadcast_ptr`] (0 until the engine drains
+/// the bind after `init`) and write the current values each `process`.
+pub fn bind_broadcast(path: &[u16], len: u32) -> u32 {
+    // Package type 1 = FLOAT_ARRAY (the `broadcastFloats` mirror): the UI reads it with `subscribeFloats`,
+    // so even a `len` of 1 stays a one-element ARRAY (the Maximizer's reduction). A SCALAR broadcast the UI
+    // reads with `subscribeFloat` uses `bind_broadcast_float` instead.
+    #[cfg(target_family = "wasm")]
+    { unsafe { host_bind_broadcast(path.as_ptr() as u32, path.len() as u32, len, 1) } }
+    #[cfg(not(target_family = "wasm"))]
+    { let _ = (path, len); 0 }
+}
+
+/// Register a SCALAR live-data broadcast slot (one f32, the TS `broadcaster.broadcastFloat(...)` mirror): the
+/// UI reads it with `subscribeFloat`, NOT `subscribeFloats` (e.g. the Tidal editor's live LFO phase). Use
+/// [`bind_broadcast`] for anything the UI reads as a Float32Array, including a one-element array.
+pub fn bind_broadcast_float(path: &[u16]) -> u32 {
+    // Package type 0 = FLOAT (scalar).
+    #[cfg(target_family = "wasm")]
+    { unsafe { host_bind_broadcast(path.as_ptr() as u32, path.len() as u32, 1, 0) } }
+    #[cfg(not(target_family = "wasm"))]
+    { let _ = path; 0 }
+}
+
+/// Register an INT-ARRAY broadcast slot (TS `broadcastIntegers` read as a plain array, e.g. the Cubed
+/// editor's playing-step row): `len` i32s the UI reads with `subscribeIntegers`, overwritten in place each
+/// block. Use [`bind_broadcast_ints`] instead for the consume-on-read RING.
+pub fn bind_broadcast_int_array(path: &[u16], len: u32) -> u32 {
+    #[cfg(target_family = "wasm")]
+    { unsafe { host_bind_broadcast(path.as_ptr() as u32, path.len() as u32, len, 3) } }
+    #[cfg(not(target_family = "wasm"))]
+    { let _ = (path, len); 0 }
+}
+
+/// Register an INT-RING broadcast slot (TS `broadcastIntegers` consume-on-read, e.g. the Velocity device's
+/// note ring): the slot is `1 + ring_len` i32s — `[0]` the device's write index, `[1..]` the ring. The
+/// consumer resets the index per UI tick after writing a 0 sentinel at it; the device appends at
+/// `ring[index]` and bumps `[0]` (both via [`broadcast_ptr`], cast to `*mut i32`).
+pub fn bind_broadcast_ints(path: &[u16], ring_len: u32) -> u32 {
+    #[cfg(target_family = "wasm")]
+    { unsafe { host_bind_broadcast(path.as_ptr() as u32, path.len() as u32, ring_len + 1, 2) } }
+    #[cfg(not(target_family = "wasm"))]
+    { let _ = (path, ring_len); 0 }
+}
+
+/// The write pointer of a [`bind_broadcast`] slot (`len` f32s), or 0 while unbound. Stable for the device's
+/// life once non-zero; cache it in state.
+pub fn broadcast_ptr(id: u32) -> u32 {
+    #[cfg(target_family = "wasm")]
+    { unsafe { host_broadcast_ptr(id) } }
+    #[cfg(not(target_family = "wasm"))]
+    { let _ = id; 0 }
+}
+
+/// Whether the UI currently SUBSCRIBES to a [`bind_broadcast`] slot (the LiveStream round-trip). Producers
+/// may skip cold work (e.g. the spectrum FFT) while inactive; cheap values are simply written every block.
+pub fn broadcast_active(id: u32) -> bool {
+    #[cfg(target_family = "wasm")]
+    { unsafe { host_broadcast_active(id) != 0 } }
+    #[cfg(not(target_family = "wasm"))]
+    { let _ = id; false }
+}
+
+/// Declare one of THIS effect's SIDECHAIN input PORTS by its pointer FIELD-KEY PATH on the device box (e.g.
+/// `[30]` for the Gate's `side-chain`). Returns the PORT id (`2, 3, ...`, after the reserved [`MAIN_INPUT`]),
+/// which the device passes to [`resolve_input`] during its DSP. The host resolves the pointer to the targeted
+/// box's audio output and orders that producer before this effect. An effect may declare ANY number of
+/// sidechains; an unconnected one simply resolves to `None`. A device calls this from `init`. Native stub
+/// returns 0.
+#[inline]
+pub fn bind_sidechain(path: &[u16]) -> u32 {
+    #[cfg(target_family = "wasm")]
+    { unsafe { host_bind_sidechain(path.as_ptr() as u32, path.len() as u32) } }
+    #[cfg(not(target_family = "wasm"))]
+    { let _ = path; 0 }
+}
+
+/// Resolve an audio input PORT by id to its stereo buffer for the current quantum (Route B/C): [`MAIN_INPUT`]
+/// for the through-signal, or a `bind_sidechain` port id. `Some` when the port is wired, `None` when it is not
+/// (an unconnected sidechain, or no upstream). The device reads the returned channels in absolute quantum
+/// coordinates. Like [`resolve_sample`], it reads an engine cell the host swaps in for this `process`, so it
+/// is O(1) and safe to call from the DSP. Native stub returns `None` (effect DSP is unit-tested via the pure
+/// per-sample path, not through the host).
+#[inline]
+pub fn resolve_input(id: u32) -> Option<AudioInputRef> {
+    #[cfg(target_family = "wasm")]
+    {
+        let mut out = AudioInputRef {left: 0, right: 0, frames: 0};
+        if unsafe { host_resolve_input(id, &mut out as *mut AudioInputRef as u32) } != 0 {
+            Some(out)
+        } else {
+            None
+        }
+    }
+    #[cfg(not(target_family = "wasm"))]
+    {
+        let _ = id;
+        None
+    }
+}
+
+// ---- SCRIPT BRIDGE wrappers -------------------------------------------------------------------------------
+// The Werkstatt / Apparat / Spielwerk devices run user JavaScript in the host's AudioWorklet. Their Rust
+// side-module is a thin BRIDGE: per block it hands the engine's audio / notes / params / samples to a host JS
+// callback that runs the user `Processor` over the shared linear memory. These wrappers are the ONLY device
+// surface that crosses back into JS during render (every other `host_*` is a wasm-to-wasm engine export); the
+// relaxation of the zero-JS-in-render guarantee is contained to these three devices. Native stubs are no-ops so
+// the crates still build + unit-test off-target.
+
+/// THIS device's 16-byte box uuid (an engine export — the engine knows it at bind). Used once from `init` to
+/// key the JS-side script bridge to the matching user `Processor`. Native stub returns zeroes.
+#[inline]
+pub fn self_uuid() -> [u8; 16] {
+    #[cfg(target_family = "wasm")]
+    {
+        let mut out = [0u8; 16];
+        unsafe { host_self_uuid(out.as_mut_ptr() as u32) };
+        out
+    }
+    #[cfg(not(target_family = "wasm"))]
+    { [0u8; 16] }
+}
+
+/// Create the JS-side script bridge for this device (from `init`): `uuid` + `kind` (`DEVICE_KIND_*`) identify
+/// it; returns a handle the device passes to every later `script_*` call. Native stub returns 0.
+#[inline]
+pub fn script_create(uuid: &[u8; 16], kind: u32, state_ptr: u32) -> u32 {
+    #[cfg(target_family = "wasm")]
+    { unsafe { host_script_create(uuid.as_ptr() as u32, kind, state_ptr) } }
+    #[cfg(not(target_family = "wasm"))]
+    { let _ = (uuid, kind, state_ptr); 0 }
+}
+
+/// Run the user `process` for one `block` over the shared audio buffers (Werkstatt / Apparat). `src_l`/`src_r`
+/// are the input channels' byte offsets (0 for an instrument with no input), `out_l`/`out_r` the output
+/// channels'. Returns 0 ok, nonzero when the bridge silenced the device (already reported). Native stub = 0.
+#[inline]
+pub fn script_audio(handle: u32, src_l: u32, src_r: u32, out_l: u32, out_r: u32, block: &Block) -> u32 {
+    #[cfg(target_family = "wasm")]
+    { unsafe { host_script_audio(handle, src_l, src_r, out_l, out_r, block.s0, block.s1, block.index, block.p0, block.p1, block.bpm, block.flags.0) } }
+    #[cfg(not(target_family = "wasm"))]
+    { let _ = (handle, src_l, src_r, out_l, out_r, block); 0 }
+}
+
+/// Deliver a note-on to the user `Processor` (Apparat) at the current sub-block boundary. Native stub no-op.
+#[inline]
+pub fn script_note_on(handle: u32, pitch: u32, velocity: f32, cent: f32, id: u32) {
+    #[cfg(target_family = "wasm")]
+    { unsafe { host_script_note_on(handle, pitch, velocity, cent, id) } }
+    #[cfg(not(target_family = "wasm"))]
+    { let _ = (handle, pitch, velocity, cent, id); }
+}
+
+/// Deliver a note-off to the user `Processor` (Apparat). Native stub no-op.
+#[inline]
+pub fn script_note_off(handle: u32, id: u32) {
+    #[cfg(target_family = "wasm")]
+    { unsafe { host_script_note_off(handle, id) } }
+    #[cfg(not(target_family = "wasm"))]
+    { let _ = (handle, id); }
+}
+
+/// The frames the user `Processor` declares through `this.latency` (0 when unset). Native stub 0.
+#[inline]
+pub fn script_latency(handle: u32) -> u32 {
+    #[cfg(target_family = "wasm")]
+    unsafe { host_script_latency(handle) }
+    #[cfg(not(target_family = "wasm"))]
+    { let _ = handle; 0 }
+}
+
+/// Tell the user `Processor` to reset (transport stop). Native stub no-op.
+#[inline]
+pub fn script_reset(handle: u32) {
+    #[cfg(target_family = "wasm")]
+    { unsafe { host_script_reset(handle) } }
+    #[cfg(not(target_family = "wasm"))]
+    { let _ = handle; }
+}
+
+/// Release the bridge (this device's INSTANCE is dying — a genuine removal, never a chain-edit survivor):
+/// drops the user `Processor` + its limiter/runtime JS-side. Native stub no-op.
+#[inline]
+pub fn script_release(handle: u32) {
+    #[cfg(target_family = "wasm")]
+    { unsafe { host_script_release(handle) } }
+    #[cfg(not(target_family = "wasm"))]
+    { let _ = handle; }
+}
+
+/// Forward a parameter change to the user `Processor` by declaration `index` + the raw `(kind, value)` plus
+/// the normalized `modulation` (NaN = none). A scriptable device's mapping lives in its `@param` declaration,
+/// on the JS side, so the bridge folds the sum there. Native stub no-op.
+#[inline]
+pub fn script_param(handle: u32, index: u32, value: ParamValue) {
+    let (kind, bits, modulation) = match value {
+        ParamValue::Unit(unit) => (PARAM_KIND_UNIT, unit, f32::NAN),
+        ParamValue::Int(int) => (PARAM_KIND_INT, int as f32, f32::NAN),
+        ParamValue::Float(float) => (PARAM_KIND_FLOAT, float, f32::NAN),
+        ParamValue::Bool(flag) => (PARAM_KIND_BOOL, if flag { 1.0 } else { 0.0 }, f32::NAN),
+        ParamValue::Modulated {base, kind, sum} => (kind, base, sum)
+    };
+    #[cfg(target_family = "wasm")]
+    { unsafe { host_script_param(handle, index, kind, bits, modulation) } }
+    #[cfg(not(target_family = "wasm"))]
+    { let _ = (handle, index, kind, bits, modulation); }
+}
+
+/// Deliver a sample slot's resolved handle (or unbind) to the user `Processor` by declaration `index` (Apparat).
+/// `present` is 0 to clear. The bridge resolves the handle's frames into `proc.samples[label]`. Native stub no-op.
+#[inline]
+pub fn script_sample(handle: u32, index: u32, sample_handle: u32, present: bool) {
+    #[cfg(target_family = "wasm")]
+    { unsafe { host_script_sample(handle, index, sample_handle, present as u32) } }
+    #[cfg(not(target_family = "wasm"))]
+    { let _ = (handle, index, sample_handle, present); }
+}
+
+/// Hand one `@collection` snapshot to the JS bridge (`data_changed` forwards it), see `host_script_data`.
+#[inline]
+pub fn script_data(handle: u32, collection: u32, ptr: u32, records: u32, fields: u32) {
+    #[cfg(target_family = "wasm")]
+    { unsafe { host_script_data(handle, collection, ptr, records, fields) } }
+    #[cfg(not(target_family = "wasm"))]
+    { let _ = (handle, collection, ptr, records, fields); }
+}
+
+/// Run the user note-transform generator + all stateful tracking (Spielwerk) over the pulled input events,
+/// writing output `EventRecord`s into `out` and returning the count. Native stub returns 0.
+#[inline]
+#[allow(clippy::too_many_arguments)]
+pub fn script_notes(handle: u32, input: &[EventRecord], out: &mut [EventRecord], from: f64, to: f64, bpm: f32, flags: u32, s0: u32, s1: u32) -> usize {
+    #[cfg(target_family = "wasm")]
+    { unsafe { host_script_notes(handle, input.as_ptr() as u32, input.len() as u32, out.as_mut_ptr() as u32, out.len() as u32, from, to, bpm, flags, s0, s1) as usize } }
+    #[cfg(not(target_family = "wasm"))]
+    { let _ = (handle, input, out.len(), from, to, bpm, flags, s0, s1); 0 }
+}
+
+// ---- NAM BRIDGE wrappers ----------------------------------------------------------------------------------
+// The NeuralAmp device's DSP is the `@opendaw/nam-wasm` module (NeuralAmpModelerCore, the exact module the TS
+// engine runs), instantiated as its OWN wasm instance in the worklet — an Emscripten build cannot join the
+// engine's shared memory. These wrappers cross into JS closures the loader binds (like `host_script_*`); the
+// zero-JS-in-render relaxation stays contained to the scriptable devices plus this one. Native stubs are
+// no-ops / "not loaded" so the crate builds + unit-tests off-target (the device then passes through).
+
+/// Create (or on a rebind REUSE, keyed by the device box `uuid`) this device's JS-side NAM bridge, returning
+/// a handle every later `nam_*` call passes. Reuse keeps the loaded model + its prewarmed state across
+/// rebinds. Native stub returns 0 (the bridge treats 0 as "no bridge" and `nam_process` reports not-loaded).
+#[inline]
+pub fn nam_create(uuid: &[u8; 16]) -> u32 {
+    #[cfg(target_family = "wasm")]
+    { unsafe { host_nam_create(uuid.as_ptr() as u32) } }
+    #[cfg(not(target_family = "wasm"))]
+    { let _ = uuid; 0 }
+}
+
+/// Load the `.nam` model JSON into the bridge's instances (the bridge copies the UTF-8 bytes out of the
+/// engine memory synchronously; byte-identical JSON is skipped). An EMPTY string unloads. The nam module
+/// itself loads lazily off-thread on the first call; until it is ready `nam_process` reports not-loaded and
+/// the device passes through, mirroring the TS processor while its wasm fetch is in flight. Native stub no-op.
+#[inline]
+pub fn nam_load(handle: u32, json: &str) {
+    #[cfg(target_family = "wasm")]
+    { unsafe { host_nam_load(handle, json.as_ptr() as u32, json.len() as u32) } }
+    #[cfg(not(target_family = "wasm"))]
+    { let _ = (handle, json); }
+}
+
+/// Mirror the TS `#onMonoChanged`: `true` drops the second instance, `false` creates it and loads the cached
+/// model into it. Native stub no-op.
+#[inline]
+pub fn nam_set_mono(handle: u32, mono: bool) {
+    #[cfg(target_family = "wasm")]
+    { unsafe { host_nam_set_mono(handle, mono as u32) } }
+    #[cfg(not(target_family = "wasm"))]
+    { let _ = (handle, mono); }
+}
+
+/// Run `frames` samples of `channels` (1 = mono, 2 = stereo) scratch buffers through the bridge's instances.
+/// Returns `true` when the model is loaded and the wet signal was written into the out buffers; `false` means
+/// not ready (module still loading / no model) and the device must pass its input through, the TS not-ready
+/// path. Native stub returns `false`.
+#[inline]
+pub fn nam_process(handle: u32, inputs: [&[f32]; 2], outputs: [&mut [f32]; 2], frames: usize, channels: u32) -> bool {
+    #[cfg(target_family = "wasm")]
+    {
+        let [in0, in1] = inputs;
+        let [out0, out1] = outputs;
+        unsafe {
+            host_nam_process(handle, in0.as_ptr() as u32, in1.as_ptr() as u32,
+                             out0.as_mut_ptr() as u32, out1.as_mut_ptr() as u32, frames as u32, channels) != 0
+        }
+    }
+    #[cfg(not(target_family = "wasm"))]
+    { let _ = (handle, inputs, outputs, frames, channels); false }
+}
+
+/// Reset the bridge's instances' internal DSP state (transport stop). Native stub no-op.
+#[inline]
+pub fn nam_reset(handle: u32) {
+    #[cfg(target_family = "wasm")]
+    { unsafe { host_nam_reset(handle) } }
+    #[cfg(not(target_family = "wasm"))]
+    { let _ = handle; }
+}
+
+/// Release the bridge's nam instance(s) (this device's INSTANCE is dying — a genuine removal, never a
+/// chain-edit survivor). Without this every rebind/removal kept the native nam instance(s) resident forever
+/// (only the mono/stereo toggle ever freed one). Native stub no-op.
+#[inline]
+pub fn nam_release(handle: u32) {
+    #[cfg(target_family = "wasm")]
+    { unsafe { host_nam_release(handle) } }
+    #[cfg(not(target_family = "wasm"))]
+    { let _ = handle; }
+}
+
+// ---- WCLAP BRIDGE wrappers --------------------------------------------------------------------------------
+// The Wclap device hosts a CLAP plugin (wasm32, own memory) in a JS bridge next to the engine, the NAM pattern.
+// Native stubs are no-ops / "not loaded" so the crate builds + unit-tests off-target (the device passes through).
+
+/// Create (or on a rebind REUSE, keyed by the device box `uuid`) this device's JS-side plugin slot.
+#[inline]
+pub fn wclap_create(uuid: &[u8; 16]) -> u32 {
+    #[cfg(target_family = "wasm")]
+    { unsafe { host_wclap_create(uuid.as_ptr() as u32) } }
+    #[cfg(not(target_family = "wasm"))]
+    { let _ = uuid; 0 }
+}
+
+/// Name the bundle url and the plugin id; the bridge fetches, instantiates and activates asynchronously and
+/// ignores a call that changes neither. Empty strings unload.
+#[inline]
+pub fn wclap_load(handle: u32, url: &str, clap_id: &str) {
+    #[cfg(target_family = "wasm")]
+    { unsafe { host_wclap_load(handle, url.as_ptr() as u32, url.len() as u32, clap_id.as_ptr() as u32, clap_id.len() as u32) } }
+    #[cfg(not(target_family = "wasm"))]
+    { let _ = (handle, url, clap_id); }
+}
+
+/// Feed the plugin's audio input port `index` (1+) for the next [`wclap_process`]; port 0 is its `inputs`.
+/// An unfed port plays silence. Native stub no-op.
+#[inline]
+pub fn wclap_input(handle: u32, index: u32, input: [&[f32]; 2]) {
+    #[cfg(target_family = "wasm")]
+    {
+        let [left, right] = input;
+        unsafe { host_wclap_input(handle, index, left.as_ptr() as u32, right.as_ptr() as u32, left.len().min(right.len()) as u32) }
+    }
+    #[cfg(not(target_family = "wasm"))]
+    { let _ = (handle, index, input); }
+}
+
+/// Run `frames` stereo samples through the plugin with the block's transport (tempo, pulse position, playing).
+/// `false` = not ready, the device must pass its input through.
+#[inline]
+pub fn wclap_process(handle: u32, inputs: [&[f32]; 2], outputs: [&mut [f32]; 2], frames: usize, block: &Block) -> bool {
+    #[cfg(target_family = "wasm")]
+    {
+        let [in0, in1] = inputs;
+        let [out0, out1] = outputs;
+        unsafe {
+            host_wclap_process(handle, in0.as_ptr() as u32, in1.as_ptr() as u32,
+                               out0.as_mut_ptr() as u32, out1.as_mut_ptr() as u32, frames as u32,
+                               block.bpm, block.p0, block.flags.0) != 0
+        }
+    }
+    #[cfg(not(target_family = "wasm"))]
+    { let _ = (handle, inputs, outputs, frames, block); false }
+}
+
+/// Queue a note on/off for the plugin's next process call (the engine dispatches events at sub-chunk
+/// boundaries, so the note lands at offset 0 of the chunk that follows). Native stub no-op.
+#[inline]
+pub fn wclap_note(handle: u32, on: bool, key: u32, velocity: f32) {
+    #[cfg(target_family = "wasm")]
+    { unsafe { host_wclap_note(handle, on as u32, key, velocity) } }
+    #[cfg(not(target_family = "wasm"))]
+    { let _ = (handle, on, key, velocity); }
+}
+
+/// Queue a resolved parameter change for the plugin's next process call, the last one per id wins within a
+/// chunk. The bridge maps it with the plugin's own `clap_param_info` range: a `Unit` value to `min..max`, a
+/// real value as is, the normalized modulation sum to a `clap_event_param_mod` amount. Native stub no-op.
+#[inline]
+pub fn wclap_param(handle: u32, clap_param_id: u32, value: ParamValue) {
+    let (kind, bits, modulation) = match value {
+        ParamValue::Unit(unit) => (PARAM_KIND_UNIT, unit, f32::NAN),
+        ParamValue::Int(int) => (PARAM_KIND_INT, int as f32, f32::NAN),
+        ParamValue::Float(float) => (PARAM_KIND_FLOAT, float, f32::NAN),
+        ParamValue::Bool(flag) => (PARAM_KIND_BOOL, if flag { 1.0 } else { 0.0 }, f32::NAN),
+        ParamValue::Modulated {base, kind, sum} => (kind, base, sum)
+    };
+    #[cfg(target_family = "wasm")]
+    { unsafe { host_wclap_param(handle, clap_param_id, kind, bits, modulation) } }
+    #[cfg(not(target_family = "wasm"))]
+    { let _ = (handle, clap_param_id, kind, bits, modulation); }
+}
+
+/// Hand the saved `clap_plugin_state` blob (base64, empty = none) to the bridge, which loads it into the
+/// plugin once it is up and skips a blob it saved itself. Native stub no-op.
+#[inline]
+pub fn wclap_state(handle: u32, base64: &str) {
+    #[cfg(target_family = "wasm")]
+    { unsafe { host_wclap_state(handle, base64.as_ptr() as u32, base64.len() as u32) } }
+    #[cfg(not(target_family = "wasm"))]
+    { let _ = (handle, base64); }
+}
+
+/// The frames the loaded plugin reports through `clap.latency` (0 until it is ready). Native stub 0.
+#[inline]
+pub fn wclap_latency(handle: u32) -> u32 {
+    #[cfg(target_family = "wasm")]
+    unsafe { host_wclap_latency(handle) }
+    #[cfg(not(target_family = "wasm"))]
+    { let _ = handle; 0 }
+}
+
+/// Transport stop: `clap_plugin.reset`. Native stub no-op.
+#[inline]
+pub fn wclap_reset(handle: u32) {
+    #[cfg(target_family = "wasm")]
+    { unsafe { host_wclap_reset(handle) } }
+    #[cfg(not(target_family = "wasm"))]
+    { let _ = handle; }
+}
+
+/// This device's instance is dying: destroy the plugin instance and drop the bridge slot. Native stub no-op.
+#[inline]
+pub fn wclap_release(handle: u32) {
+    #[cfg(target_family = "wasm")]
+    { unsafe { host_wclap_release(handle) } }
+    #[cfg(not(target_family = "wasm"))]
+    { let _ = handle; }
+}
+
+/// Pull THIS device's parameters that CHANGED at pulse `position` into `out` (the host resolves each — its
+/// automation curve, else its field value — and diffs against the last value it handed out), returning the
+/// number written. The device applies each via its `parameter_changed`. Called by the SDK on a clock event.
+/// Native stub returns 0.
+#[inline]
+pub fn update_parameters(position: f64, out: &mut [ParamChange]) -> usize {
+    #[cfg(target_family = "wasm")]
+    { unsafe { host_update_parameters(position, out.as_mut_ptr() as u32, out.len() as u32) as usize } }
+    #[cfg(not(target_family = "wasm"))]
+    { let _ = (position, out.len()); 0 }
+}
+
+/// The FIRST update position at or AFTER `at` (INCLUSIVE) — the seed for a fragment loop, mirroring TS
+/// `Fragmentor`'s `ceil(p0 / rate)` so a grid point exactly on a block's start fires (otherwise the first
+/// update is dropped). The loop then ADVANCES with the strict [`next_update_position`]. Returns `INFINITY`
+/// when THIS device has no automated parameter (the loop never splits). Native stub returns `INFINITY`.
+#[inline]
+pub fn first_update_position(at: f64) -> f64 {
+    #[cfg(target_family = "wasm")]
+    { unsafe { host_first_update_position(at) } }
+    #[cfg(not(target_family = "wasm"))]
+    { let _ = at; f64::INFINITY }
+}
+
+/// The next parameter-update position STRICTLY after `after`, per the engine's update-clock policy (a fixed
+/// grid today, tempo-aware later) — the single place that owns the rate. Strict so a fragment loop advancing
+/// `position = next_update_position(position)` always moves forward (the seed comes from the inclusive
+/// [`first_update_position`]). Returns `INFINITY` when THIS device has no automated parameter, so the loop
+/// stops. A device's render template walks these to fragment its work; it never computes a grid itself.
+/// Native stub returns `INFINITY` (no fragmentation off-engine).
+#[inline]
+pub fn next_update_position(after: f64) -> f64 {
+    #[cfg(target_family = "wasm")]
+    { unsafe { host_next_update_position(after) } }
+    #[cfg(not(target_family = "wasm"))]
+    { let _ = after; f64::INFINITY }
+}
+
+/// The most parameter changes [`update_parameters`] returns per call (a device's whole param set, comfortably).
+const MAX_PARAM_CHANGES: usize = 32;
+
+/// Pull the parameters changed at `position` and apply each through `apply` (the device's `parameter_changed`),
+/// passing whether the value is the uniform automation value (to map) or an already-real value (to use).
+/// The scratch is on the stack, so no device-global buffer. Public so the SCRIPTABLE devices (which write
+/// `process` directly instead of via the `render_*` templates) can refresh their automated parameters at each
+/// update position exactly as the templates do.
+#[inline]
+pub fn apply_param_changes<S>(state: &mut S, position: f64, apply: fn(&mut S, u32, ParamValue)) {
+    let mut changes = [ParamChange {id: 0, kind: 0, value: 0.0, modulation: f32::NAN}; MAX_PARAM_CHANGES];
+    let count = update_parameters(position, &mut changes);
+    for change in &changes[..count] {
+        apply(state, change.id, ParamValue::from_wire(change.kind, change.value, change.modulation));
+    }
+}
+
+/// Run `body` with the device's typed state, parsed from the raw `state_ptr` the host passes to the `init`
+/// and `parameter_changed` exports. The one `unsafe` deref, kept here in the ABI shim.
+///
+/// # Safety
+/// `state_ptr` must point at a live, uniquely-borrowed `S` (the engine's per-instance state block); nothing
+/// else may alias it for the call. The engine guarantees this (it calls these exports outside `process`).
+#[inline]
+pub unsafe fn with_state<S>(state_ptr: u32, body: impl FnOnce(&mut S)) {
+    body(&mut *(state_ptr as *mut S))
+}
+
+/// Read-only view over a device's input ports.
+#[derive(Clone, Copy)]
+pub struct Inputs<'a> {
+    offsets: &'a [u32],
+    frames: usize,
+}
+
+impl<'a> Inputs<'a> {
+    #[inline]
+    pub fn len(&self) -> usize { self.offsets.len() }
+
+    #[inline]
+    pub fn is_empty(&self) -> bool { self.offsets.is_empty() }
+
+    /// The `index`-th input buffer as a safe slice (`frames` samples).
+    #[inline]
+    pub fn get(&self, index: usize) -> &'a [f32] {
+        let offset = self.offsets[index];
+        unsafe { slice::from_raw_parts(offset as *const f32, self.frames) }
+    }
+
+    /// The two input channels `[left, right]`, mirroring TS `StereoMatrix.Channels`. Requires a stereo input.
+    #[inline]
+    pub fn channels(&self) -> [&'a [f32]; 2] {
+        [self.get(0), self.get(1)]
+    }
+}
+
+/// The well-known PORT id of an effect's main input, the through-signal the engine always wires from the
+/// upstream node. Resolve it with [`resolve_input`] exactly like a sidechain port; `bind_sidechain` ports are
+/// numbered from `2`.
+pub const MAIN_INPUT: u32 = 1;
+
+/// A resolved audio input port (Route B/C): the source's stereo buffer for the WHOLE quantum, addressed by
+/// pointers. The device indexes it in absolute quantum coordinates (the same `block.s0..s1` it writes to
+/// `output`). Mirrors [`SampleRef`]: a thin handle whose accessors hand back safe slices.
+#[derive(Clone, Copy)]
+pub struct AudioInputRef {
+    pub left: u32,
+    pub right: u32,
+    pub frames: u32,
+}
+
+impl AudioInputRef {
+    #[inline]
+    pub fn left(&self) -> &[f32] { unsafe { slice::from_raw_parts(self.left as *const f32, self.frames as usize) } }
+
+    #[inline]
+    pub fn right(&self) -> &[f32] { unsafe { slice::from_raw_parts(self.right as *const f32, self.frames as usize) } }
+
+    /// Both channels `[left, right]`, mirroring TS `StereoMatrix.Channels`.
+    #[inline]
+    pub fn channels(&self) -> [&[f32]; 2] { [self.left(), self.right()] }
+}
+
+/// Everything a device needs for one `process` call, as safe references. Built once by
+/// [`Ports::from_descriptor`]; device code touches only these fields and never writes `unsafe`.
+pub struct Ports<'a, S> {
+    pub frames: usize,
+    pub inputs: Inputs<'a>,
+    /// The output channels, mirroring TS `StereoMatrix.Channels`: `output[0]` = left, `output[1]` = right,
+    /// pointing at distinct `f32[frames]` buffers so the two `&mut` slices never alias. A mono device writes
+    /// the same samples to both.
+    pub output: [&'a mut [f32]; 2],
+    pub params: &'a [f32],
+    pub state: &'a mut S,
+    /// The quantum's render blocks (the `ProcessInfo`). The device pulls each block's events and may
+    /// fragment `[s0, s1)` at the offsets, or process the whole quantum and ignore the blocks.
+    pub blocks: &'a [Block],
+    /// A device-owned scratch the device PULLS its input events into (via [`pull_events`]); not
+    /// pre-filled by the host. `len()` is the capacity. Empty when the descriptor declares no scratch.
+    pub event_scratch: &'a mut [EventRecord],
+    /// The engine's render sample rate. Passed in via the descriptor, so devices never hold it as a
+    /// global; the host sets it from the audio context.
+    pub sample_rate: f32,
+}
+
+impl<'a, S> Ports<'a, S> {
+    /// Parse a canonical descriptor into safe views. `event_scratch` is the device-owned pull buffer
+    /// (empty when the descriptor declares `in_event_cap == 0`); `blocks` is the quantum's block array.
+    ///
+    /// # Safety
+    /// `desc_ptr` must reference a valid descriptor whose offsets describe live, mutually
+    /// non-aliasing f32 buffers of `frames` samples, a state block of at least `size_of::<S>()`,
+    /// `in_event_cap` writable `EventRecord` slots, and `block_count` valid `Block`s — all in this
+    /// module's shared linear memory. The engine guarantees this when it assembles the descriptor;
+    /// nothing else may call it.
+    #[inline]
+    pub unsafe fn from_descriptor(desc_ptr: u32) -> Self {
+        let desc = desc_ptr as *const u32;
+        let frames = *desc.add(0) as usize;
+        let in_count = *desc.add(1) as usize;
+        let in_offsets_ptr = *desc.add(2) as *const u32;
+        let out_count = *desc.add(3) as usize;
+        let out_offsets_ptr = *desc.add(4) as *const u32;
+        let param_count = *desc.add(5) as usize;
+        let params_ptr = *desc.add(6) as *const f32;
+        let state_ptr = *desc.add(7) as *mut S;
+        let in_event_cap = *desc.add(8) as usize;
+        let in_events_ptr = *desc.add(9) as *mut EventRecord;
+        // [10] out_event_cap / [11] out_events_ptr: event-output devices (MIDI fx, phase 4); unused here.
+        let block_count = *desc.add(12) as usize;
+        let blocks_ptr = *desc.add(13) as *const Block;
+        let sample_rate = f32::from_bits(*desc.add(14));
+        let in_offsets = if in_count == 0 {
+            slice::from_raw_parts(NonNull::<u32>::dangling().as_ptr(), 0)
+        } else {
+            slice::from_raw_parts(in_offsets_ptr, in_count)
+        };
+        // The two output channels live at out_offsets[0] / [1] (distinct buffers, so the `&mut`s never alias).
+        let out_offsets = if out_count == 0 {
+            slice::from_raw_parts(NonNull::<u32>::dangling().as_ptr(), 0)
+        } else {
+            slice::from_raw_parts(out_offsets_ptr, out_count)
+        };
+        let output_left = if out_count >= 1 {
+            slice::from_raw_parts_mut(out_offsets[0] as *mut f32, frames)
+        } else {
+            slice::from_raw_parts_mut(NonNull::<f32>::dangling().as_ptr(), 0)
+        };
+        let output_right = if out_count >= 2 {
+            slice::from_raw_parts_mut(out_offsets[1] as *mut f32, frames)
+        } else {
+            slice::from_raw_parts_mut(NonNull::<f32>::dangling().as_ptr(), 0)
+        };
+        let params = if param_count == 0 {
+            slice::from_raw_parts(NonNull::<f32>::dangling().as_ptr(), 0)
+        } else {
+            slice::from_raw_parts(params_ptr, param_count)
+        };
+        let event_scratch = if in_event_cap == 0 {
+            slice::from_raw_parts_mut(NonNull::<EventRecord>::dangling().as_ptr(), 0)
+        } else {
+            slice::from_raw_parts_mut(in_events_ptr, in_event_cap)
+        };
+        let blocks = if block_count == 0 {
+            slice::from_raw_parts(NonNull::<Block>::dangling().as_ptr(), 0)
+        } else {
+            slice::from_raw_parts(blocks_ptr, block_count)
+        };
+        Self {
+            frames,
+            inputs: Inputs {offsets: in_offsets, frames},
+            output: [output_left, output_right],
+            params,
+            state: &mut *state_ptr,
+            blocks,
+            event_scratch,
+            sample_rate,
+        }
+    }
+}
+
+/// The device-SDK template for an AUDIO instrument (the TS `AudioProcessor` / `NoteEventInstrument`
+/// analog). A device implements this and calls [`render_instrument`] from its `process` export; the SDK
+/// owns the event pull, the fragment-at-offsets timing, and the dispatch, so a device author writes only
+/// the DSP: render active state into a sub-chunk (`process_audio`), apply one note event at its offset
+/// (`handle_event`), and an optional once-per-quantum post-pass (`finish`, e.g. reclaim idle voices or
+/// run a delay). `State` is the device's instance state, interpreted from the engine-allocated block.
+pub trait Instrument {
+    type State;
+    /// Render the active state additively into the stereo `output` (`[left, right]`) for one inter-event
+    /// sub-chunk; a mono instrument writes the same samples to both. `block` is THIS chunk's block (like the
+    /// audio effect's): `bpm` for tempo (a voice's glide), `p0`/`p1` the chunk's pulse range, `flags` carried
+    /// (one-shot flags cleared after the first chunk), and `s0`/`s1` rebased to `0`/`len` to match the slice.
+    /// The sample rate is the device's own (it stashed `Ports::sample_rate` in `state`), never a per-call argument.
+    fn process_audio(state: &mut Self::State, output: [&mut [f32]; 2], block: &Block);
+    /// Apply one note event (on / off) at its sample offset.
+    fn handle_event(state: &mut Self::State, event: &EventRecord);
+    /// Emit the device's OWN note events for the block's pulse range into `out`, returning how many were
+    /// written; an instrument with an internal sequencer (a step pattern, an arpeggio) writes its notes here.
+    /// They join the pulled input events, so they are offset-resolved, ordered and dispatched to
+    /// `handle_event` down the identical path - the device never places notes itself. Positions must lie in
+    /// `[from, to)`. Default: nothing (no internal source).
+    fn generate_events(state: &mut Self::State, from: f64, to: f64, flags: BlockFlags,
+                       out: &mut [EventRecord]) -> usize {
+        let _ = (state, from, to, flags, out);
+        0
+    }
+    /// Reset the device's RUNTIME state to silence on a transport STOP: drop every active voice, clear
+    /// envelopes / read heads / filter history, so the next playback starts clean. Keep the bindings (the param
+    /// / sample / field ids and the resolved parameter values, the sample rate) — only the sounding state is
+    /// cleared. Called outside render, never during `process`. Default: nothing.
+    fn reset(state: &mut Self::State) {
+        let _ = state;
+    }
+    /// Register this device's automatable parameters with the host via [`bind_parameter`], stashing the
+    /// returned ids in `state`. Called once when the device is wired, also receiving the engine's `sample_rate` (stable for the device's life; stash it if the DSP needs it). Default: nothing (no params).
+    fn init(state: &mut Self::State, sample_rate: f32) {
+        let _ = (state, sample_rate);
+    }
+    /// Apply a parameter's new typed `value` for `id` (the value `bind_parameter` returned), storing it in
+    /// `state`. `value` is a [`ParamValue`]: `Unit` is the uniform `0..1` automation value to MAP to the
+    /// parameter's range; `Int` / `Float` / `Bool` are a box field's already-real value to use directly. Called
+    /// for the initial value, on edits, and on automation. Default: nothing (no params).
+    fn parameter_changed(state: &mut Self::State, id: u32, value: ParamValue) {
+        let _ = (state, id, value);
+    }
+    /// Apply a PLAIN box field's new typed `value` for `id` (the value [`observe_field`] returned), storing it
+    /// in `state`. Distinct from `parameter_changed`: this is a raw field copy ([`FieldValue`], the device
+    /// matches the variant it expects and panics on any other), never a parameter, so the device owns knowing
+    /// things like its own routing note. Delivered on catch-up and on edits, only inside a transaction (never
+    /// during render). Default: nothing.
+    fn field_changed(state: &mut Self::State, id: u32, value: FieldValue) {
+        let _ = (state, id, value);
+    }
+    /// Apply this device's observed SAMPLE reference for `id` (the value [`observe_sample`] returned), storing
+    /// it in `state`. `sample` is `Some(handle)` to later [`resolve_sample`] when the pointer targets a sample,
+    /// or `None` when it is unbound (cleared) and the device should stop playing it. Delivered on catch-up and
+    /// on add / remove / repoint, only inside a transaction. Default: nothing (no samples).
+    fn sample_changed(state: &mut Self::State, id: u32, sample: Option<u32>) {
+        let _ = (state, id, sample);
+    }
+    /// Apply this device's observed SOUNDFONT reference for `id` (the value [`observe_soundfont`] returned),
+    /// storing the handle in `state`. `soundfont` is `Some(handle)` to later [`resolve_soundfont`] when the
+    /// `file` pointer targets a `SoundfontFileBox`, or `None` when unbound. Delivered on catch-up and on
+    /// add / remove / repoint, only inside a transaction. Default: nothing (no soundfont).
+    fn soundfont_changed(state: &mut Self::State, id: u32, soundfont: Option<u32>) {
+        let _ = (state, id, soundfont);
+    }
+    /// Once per quantum, after all blocks (e.g. a feedback delay over the whole stereo `output`). Default: nothing.
+    fn finish(state: &mut Self::State, output: [&mut [f32]; 2]) {
+        let _ = (state, output);
+    }
+}
+
+static CHUNK_START: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+
+/// The quantum frame where the current instrument `process_audio` chunk starts (its slices are rebased to 0),
+/// for reading a [`resolve_input`] buffer, which is in absolute quantum coordinates.
+#[inline]
+pub fn chunk_start() -> usize {
+    CHUNK_START.load(core::sync::atomic::Ordering::Relaxed) as usize
+}
+
+/// Dispatch ONE block's `events` (offset-sorted, within `[block.s0, block.s1)`) over the stereo `output`:
+/// `process_audio` for each chunk between events, `handle_event` (or a Route-D param pull) at each offset.
+/// Each chunk gets a cloned `block` with `s0`/`s1` rebased to `0`/`len`, `p0`/`p1` the chunk's pulse range,
+/// and `flags` cleared after the first chunk. Host-independent (events are supplied), so a device's DSP is
+/// unit-testable without the engine. Does not clear `output` or run `finish`.
+#[inline]
+pub fn dispatch_range<I: Instrument>(state: &mut I::State, output: [&mut [f32]; 2], events: &[EventRecord], block: &Block) {
+    let [out_left, out_right] = output;
+    let frames = out_left.len();
+    let s0 = (block.s0 as usize).min(frames);
+    let s1 = (block.s1 as usize).min(frames);
+    let mut cursor = s0;
+    let mut chunk_p0 = block.p0; // the pulse position at `cursor`
+    let mut flags = block.flags; // one-shot flags belong to the first chunk only
+    for event in events {
+        let offset = (event.offset as usize).clamp(s0, s1);
+        if offset > cursor {
+            let sub = Block {index: block.index, flags, p0: chunk_p0, p1: event.position, s0: 0, s1: (offset - cursor) as u32, bpm: block.bpm};
+            CHUNK_START.store(cursor as u32, core::sync::atomic::Ordering::Relaxed);
+            I::process_audio(state, [&mut out_left[cursor..offset], &mut out_right[cursor..offset]], &sub);
+            cursor = offset;
+            chunk_p0 = event.position;
+            flags.clear_event_flags();
+        }
+        // A clock event (Route D) pulls the parameters changed at this position; a note event voices.
+        if event.kind == EVENT_PARAM {
+            apply_param_changes::<I::State>(state, event.position, I::parameter_changed);
+        } else {
+            I::handle_event(state, event);
+        }
+    }
+    if cursor < s1 {
+        let sub = Block {index: block.index, flags, p0: chunk_p0, p1: block.p1, s0: 0, s1: (s1 - cursor) as u32, bpm: block.bpm};
+        CHUNK_START.store(cursor as u32, core::sync::atomic::Ordering::Relaxed);
+        I::process_audio(state, [&mut out_left[cursor..s1], &mut out_right[cursor..s1]], &sub);
+    }
+}
+
+/// Order resolved records for `dispatch_range`: by sample offset, then at an equal offset note-off ->
+/// param-update -> note-on, so a note starting at an update position sees the refreshed parameter.
+fn record_rank(kind: u32) -> u8 {
+    match kind {
+        EVENT_NOTE_OFF | EVENT_CHOKE => 0, // releases first, so a choke at a position precedes any note-on there
+        EVENT_PARAM => 1,
+        _ => 2 // EVENT_NOTE_ON
+    }
+}
+
+/// The full per-quantum instrument path a device calls from `process`: clear the output, PULL each block's
+/// notes into the scratch (Route A) AND append a param-update marker at each `next_update_position` in the
+/// block (Route D — generated here from the engine's update clock, not injected into the stream), resolve
+/// every record's sample offset, sort, dispatch the quantum (`dispatch_range` voices notes and refreshes
+/// parameters at the markers), then run the once-per-quantum `finish`.
+pub fn render_instrument<I: Instrument>(ports: Ports<I::State>) {
+    let Ports {output, state, blocks, event_scratch, ..} = ports;
+    let [out_left, out_right] = output;
+    for sample in out_left.iter_mut() {
+        *sample = 0.0;
+    }
+    for sample in out_right.iter_mut() {
+        *sample = 0.0;
+    }
+    // Go block by block (like `render_effect`), so each chunk's `process_audio` gets its own block. Per block:
+    // PULL its notes (Route A) plus a param-update marker at each update position (Route D — INCLUSIVE seed,
+    // STRICT advance, none when un-automated), resolve sample offsets, sort (off -> param -> on at a tie),
+    // and dispatch. Then the once-per-quantum `finish`.
+    for block in blocks {
+        let mut count = pull_events(block.p0, block.p1, block.flags.0, event_scratch);
+        count += I::generate_events(state, block.p0, block.p1, block.flags, &mut event_scratch[count..]);
+        let mut position = first_update_position(block.p0);
+        while position < block.p1 && count < event_scratch.len() {
+            event_scratch[count] = EventRecord {position, offset: 0, kind: EVENT_PARAM, id: 0, pitch: 0, velocity: 0.0, cent: 0.0, duration: 0.0};
+            count += 1;
+            position = next_update_position(position);
+        }
+        for record in &mut event_scratch[..count] {
+            record.offset = pulse_to_offset(record.position);
+        }
+        event_scratch[..count].sort_unstable_by(|a, b| a.offset.cmp(&b.offset).then(record_rank(a.kind).cmp(&record_rank(b.kind))));
+        dispatch_range::<I>(state, [&mut *out_left, &mut *out_right], &event_scratch[..count], block);
+    }
+    I::finish(state, [out_left, out_right]);
+}
+
+/// The device-SDK template for an AUDIO EFFECT (the TS `AudioEffectDeviceProcessor` analog). It reads one
+/// input buffer and writes one output buffer, going block to block AND breaking each block at its clock
+/// events: render up to the event, pull the parameters changed there (`parameter_changed`), then continue
+/// (the TS `AudioProcessor` split loop). `State` is the effect's instance state (e.g. a filter's history).
+pub trait AudioEffect {
+    type State;
+    /// Transform the stereo `input` (`[left, right]`) into `output` (`[left, right]`, same length) for one
+    /// inter-event sub-chunk. `block` is THIS chunk's block: its `p0`/`p1` are the chunk's pulse range,
+    /// `bpm`/`flags` carry over (one-shot flags cleared after the first chunk), and `s0`/`s1` are rebased to
+    /// `0`/`len` to match the sliced buffers. An effect locks to tempo via `block`; one driven purely by
+    /// automated parameters ignores it and reads what `parameter_changed` set. The sample rate is the device's
+    /// own (it stashed `Ports::sample_rate`).
+    /// Transform this sub-chunk's audio into `output` (`[left, right]`, the WHOLE quantum buffers). The device
+    /// resolves its inputs by PORT id with [`resolve_input`] ([`MAIN_INPUT`] for the through-signal, any
+    /// `bind_sidechain` port for analysis), and reads / writes in ABSOLUTE quantum coordinates: the range to
+    /// process is `block.s0..block.s1`, and a resolved input's channels are indexed by the same `i`. `block`'s
+    /// `p0`/`p1` are the chunk's pulse range, `bpm`/`flags` carry over. The sample rate is the device's own.
+    fn process_audio(state: &mut Self::State, output: [&mut [f32]; 2], block: &Block);
+    /// Register this device's automatable parameters with the host via [`bind_parameter`] (and any sidechain
+    /// input ports via [`bind_sidechain`]), stashing the returned ids in `state`. Called once when the device
+    /// is wired, also receiving the engine's `sample_rate` (stable for the device's life; stash it if the DSP
+    /// needs it). Default: nothing (no params).
+    fn init(state: &mut Self::State, sample_rate: f32) {
+        let _ = (state, sample_rate);
+    }
+    /// Apply a parameter's new typed `value` for `id` (the value `bind_parameter` returned), storing it in
+    /// `state`. `value` is a [`ParamValue`]: `Unit` is the uniform `0..1` automation value to MAP to the
+    /// parameter's range; `Int` / `Float` / `Bool` are a box field's already-real value to use directly. Called
+    /// for the initial value, on edits, and on automation. Default: nothing (no params).
+    fn parameter_changed(state: &mut Self::State, id: u32, value: ParamValue) {
+        let _ = (state, id, value);
+    }
+    /// Reset the effect's RUNTIME state to silence on a transport STOP: clear delay lines / reverb tails /
+    /// filter history / detector + envelope state, so the next playback starts clean. Keep the bindings (param
+    /// ids, resolved values, sample rate). Called outside render, never during `process`. Default: nothing.
+    fn reset(state: &mut Self::State) {
+        let _ = state;
+    }
+}
+
+/// The per-quantum effect path a device calls from `process`: run the effect PER BLOCK, and within each block
+/// split the sample range at the engine's update positions (Route D) — `process_audio` for the chunk before
+/// each, refresh the parameters there — the TS `AudioProcessor` loop, with the split points from
+/// `next_update_position` rather than injected events. The device resolves its OWN inputs by port id; this
+/// template only resolves [`MAIN_INPUT`] to handle the degenerate cases (no upstream -> silence; not playing,
+/// i.e. no transport blocks -> pass the input through). The sub-blocks carry ABSOLUTE `s0`/`s1`, so the device
+/// reads / writes the whole-quantum buffers by absolute index and a resolved input lines up sample-for-sample.
+pub fn render_effect<E: AudioEffect>(ports: Ports<E::State>) {
+    let Ports {output, state, blocks, ..} = ports;
+    let [out_left, out_right] = output;
+    let frames = out_left.len();
+    let Some(input) = resolve_input(MAIN_INPUT) else {
+        out_left.fill(0.0);
+        out_right.fill(0.0);
+        return;
+    };
+    if blocks.is_empty() {
+        out_left.copy_from_slice(&input.left()[..frames]);
+        out_right.copy_from_slice(&input.right()[..frames]);
+        return;
+    }
+    for block in blocks {
+        let s0 = (block.s0 as usize).min(frames);
+        let s1 = (block.s1 as usize).min(frames);
+        if s1 <= s0 {
+            continue;
+        }
+        let mut cursor = s0;
+        let mut chunk_p0 = block.p0; // the pulse position at `cursor`
+        let mut flags = block.flags; // one-shot flags belong to the first chunk only
+        let mut position = first_update_position(block.p0);
+        while position < block.p1 {
+            let offset = (pulse_to_offset(position) as usize).clamp(s0, s1);
+            if offset > cursor {
+                let sub = Block {index: block.index, flags, p0: chunk_p0, p1: position, s0: cursor as u32, s1: offset as u32, bpm: block.bpm};
+                E::process_audio(state, [&mut *out_left, &mut *out_right], &sub);
+                cursor = offset;
+                chunk_p0 = position;
+                flags.clear_event_flags();
+            }
+            apply_param_changes::<E::State>(state, position, E::parameter_changed);
+            position = next_update_position(position);
+        }
+        if cursor < s1 {
+            let sub = Block {index: block.index, flags, p0: chunk_p0, p1: block.p1, s0: cursor as u32, s1: s1 as u32, bpm: block.bpm};
+            E::process_audio(state, [&mut *out_left, &mut *out_right], &sub);
+        }
+    }
+}
+
+/// The device-SDK template for a MIDI EFFECT (the TS `MidiEffectProcessor` / `NoteEventSource` analog). A
+/// MIDI fx is a PULL SOURCE: the host invokes its `process_events` for a range only when something
+/// downstream pulls it, and the device pulls its OWN upstream (over a range it chooses) and returns the
+/// transformed events for the range. It produces no audio. A device implements `transform` and calls
+/// [`render_midi_effect`] from its `process_events` export.
+pub trait MidiEffect {
+    /// Per-instance state, interpreted from the engine-allocated (zeroed) block, persisting across pulls
+    /// (e.g. an arpeggiator's stack of held notes). `()` for a stateless fx.
+    type State;
+    /// Transform the pulled upstream `input` events into `output`, returning the count written (bounded by
+    /// `output.len()`). The relationship is NOT one-to-one: an fx may DROP events (a transpose silently
+    /// ignores notes that fall out of MIDI range, never clamps them) or PRODUCE more than it consumed (an
+    /// arpeggiator emits a stream from a held chord). Offsets are absolute within the quantum; preserve
+    /// them unless the fx warps time.
+    fn transform(state: &mut Self::State, input: &[EventRecord], output: &mut [EventRecord]) -> usize;
+    /// Register this device's automatable parameters with the host via [`bind_parameter`], stashing the
+    /// returned ids in `state`. Called once when the device is wired, also receiving the engine's `sample_rate` (stable for the device's life; stash it if the DSP needs it). Default: nothing (no params).
+    fn init(state: &mut Self::State, sample_rate: f32) {
+        let _ = (state, sample_rate);
+    }
+    /// Apply a parameter's new typed `value` for `id`. `value` is a [`ParamValue`]: `Unit` is the uniform
+    /// `0..1` automation value (the device maps it), `Int` / `Float` / `Bool` a box field's already-real value.
+    /// A midi-fx with automated params is pulled per update sub-range, so this is called at each. Default: nothing.
+    fn parameter_changed(state: &mut Self::State, id: u32, value: ParamValue) {
+        let _ = (state, id, value);
+    }
+}
+
+// The on-stack scratch a MIDI fx pulls its upstream into before transforming. Stack-resident (the device
+// gets a 256 KiB stack), so no device-global buffer; sized for a generous per-range event count.
+const MIDI_PULL_SCRATCH: usize = 256;
+
+/// The pull-response path a MIDI-fx device calls from `process_events(from, to, flags, state_ptr, out_ptr,
+/// max)`: split `[from, to)` at the engine's update positions (Route D) and, per sub-range, PULL the upstream
+/// into an on-stack scratch and `transform` it into the host-provided output, refreshing the device's
+/// parameters at each boundary. A device with no automation gets no update positions (INFINITY), so this is
+/// ONE pull over `[from, to)` — the previous behaviour. The upstream range equals each sub-range, which suits
+/// pitch / velocity / arp transforms that do not move events in time.
+pub fn render_midi_effect<M: MidiEffect>(from: f64, to: f64, flags: u32, state_ptr: u32, out_ptr: u32, max: u32) -> u32 {
+    let state = unsafe { &mut *(state_ptr as *mut M::State) };
+    let out = unsafe { slice::from_raw_parts_mut(out_ptr as *mut EventRecord, max as usize) };
+    let blank = EventRecord {position: 0.0, offset: 0, kind: 0, id: 0, pitch: 0, velocity: 0.0, cent: 0.0, duration: 0.0};
+    let mut count = 0;
+    let mut sub_from = from;
+    // The seed is INCLUSIVE (a boundary exactly on `from` fires); the loop then advances STRICTLY. When the fx
+    // has no automation, `boundary` is INFINITY, so this is ONE pull over `[from, to)` — the previous behaviour.
+    let mut boundary = first_update_position(from);
+    loop {
+        let sub_to = if boundary < to {boundary} else {to};
+        let mut scratch = [blank; MIDI_PULL_SCRATCH];
+        let pulled = pull_events(sub_from, sub_to, flags, &mut scratch);
+        count += M::transform(state, &scratch[..pulled], &mut out[count..]);
+        if sub_to >= to {
+            break;
+        }
+        // refresh this fx's parameters at the update boundary, before the next sub-range transforms.
+        apply_param_changes::<M::State>(state, boundary, M::parameter_changed);
+        sub_from = sub_to;
+        boundary = next_update_position(boundary);
+    }
+    count as u32
+}
+
+#[cfg(test)]
+mod tests {
+    //! The instrument dispatch (`dispatch_range`): each inter-event chunk gets its OWN cloned block, with
+    //! `s0`/`s1` rebased to the slice, `p0`/`p1` the chunk's pulse range, `bpm` carried, and the one-shot
+    //! flags cleared after the first chunk. A recording mock instrument captures what each chunk received.
+    use super::{dispatch_range, Block, BlockFlags, EventRecord, Instrument, EVENT_NOTE_ON};
+
+    struct Chunk {
+        len: usize,
+        p0: f64,
+        p1: f64,
+        bpm: f32,
+        s0: u32,
+        s1: u32,
+        flags: u32
+    }
+
+    #[derive(Default)]
+    struct Recorder {
+        chunks: Vec<Chunk>,
+        pitches: Vec<u32>
+    }
+
+    impl Instrument for Recorder {
+        type State = Recorder;
+
+        fn process_audio(state: &mut Recorder, output: [&mut [f32]; 2], block: &Block) {
+            let [left, _right] = output;
+            state.chunks.push(Chunk {
+                len: left.len(), p0: block.p0, p1: block.p1, bpm: block.bpm,
+                s0: block.s0, s1: block.s1, flags: block.flags.0
+            });
+        }
+
+        fn handle_event(state: &mut Recorder, event: &EventRecord) {
+            state.pitches.push(event.pitch);
+        }
+    }
+
+    fn note_on(offset: u32, position: f64, pitch: u32) -> EventRecord {
+        EventRecord {position, offset, kind: EVENT_NOTE_ON, id: 1, pitch, velocity: 1.0, cent: 0.0, duration: 0.0}
+    }
+
+    fn block(s0: u32, s1: u32, p0: f64, p1: f64, bpm: f32) -> Block {
+        Block {index: 0, flags: BlockFlags(0), p0, p1, s0, s1, bpm}
+    }
+
+    #[test]
+    fn a_note_splits_the_block_into_two_rebased_chunks() {
+        let mut state = Recorder::default();
+        let (mut left, mut right) = ([0.0f32; 128], [0.0f32; 128]);
+        // a 128-sample block at pulses [100, 228), 140 bpm; a note-on at sample 64 / pulse 164.
+        let event = note_on(64, 164.0, 60);
+        dispatch_range::<Recorder>(&mut state, [&mut left[..], &mut right[..]], &[event], &block(0, 128, 100.0, 228.0, 140.0));
+        assert_eq!(state.chunks.len(), 2, "the note splits the block at its offset");
+        let first = &state.chunks[0];
+        assert_eq!(first.len, 64);
+        assert_eq!((first.s0, first.s1), (0, 64), "rebased to the slice");
+        assert_eq!(first.bpm, 140.0, "bpm carried");
+        assert_eq!((first.p0, first.p1), (100.0, 164.0), "first chunk spans block start -> note");
+        let second = &state.chunks[1];
+        assert_eq!(second.len, 64);
+        assert_eq!((second.p0, second.p1), (164.0, 228.0), "second chunk spans note -> block end");
+        assert_eq!(state.pitches, vec![60], "the note is handled once, between the chunks");
+    }
+
+    #[test]
+    fn no_events_is_one_full_chunk() {
+        let mut state = Recorder::default();
+        let (mut left, mut right) = ([0.0f32; 128], [0.0f32; 128]);
+        dispatch_range::<Recorder>(&mut state, [&mut left[..], &mut right[..]], &[], &block(0, 128, 10.0, 138.0, 120.0));
+        assert_eq!(state.chunks.len(), 1);
+        assert_eq!(state.chunks[0].len, 128);
+        assert_eq!((state.chunks[0].p0, state.chunks[0].p1), (10.0, 138.0));
+    }
+
+    #[test]
+    fn the_block_sample_range_is_respected() {
+        // a block covering only samples [32, 96): one chunk, 64 long, rebased to 0..64.
+        let mut state = Recorder::default();
+        let (mut left, mut right) = ([0.0f32; 128], [0.0f32; 128]);
+        dispatch_range::<Recorder>(&mut state, [&mut left[..], &mut right[..]], &[], &block(32, 96, 0.0, 64.0, 120.0));
+        assert_eq!(state.chunks.len(), 1);
+        assert_eq!(state.chunks[0].len, 64);
+        assert_eq!((state.chunks[0].s0, state.chunks[0].s1), (0, 64));
+    }
+
+    #[test]
+    fn one_shot_flags_belong_to_the_first_chunk_only() {
+        let mut state = Recorder::default();
+        let (mut left, mut right) = ([0.0f32; 128], [0.0f32; 128]);
+        let flags = BlockFlags(BlockFlags::TRANSPORTING | BlockFlags::DISCONTINUOUS);
+        let block = Block {index: 0, flags, p0: 0.0, p1: 128.0, s0: 0, s1: 128, bpm: 120.0};
+        dispatch_range::<Recorder>(&mut state, [&mut left[..], &mut right[..]], &[note_on(64, 64.0, 60)], &block);
+        assert_eq!(state.chunks.len(), 2);
+        assert!(state.chunks[0].flags & BlockFlags::DISCONTINUOUS != 0, "the first chunk keeps the one-shot flag");
+        assert!(state.chunks[1].flags & BlockFlags::DISCONTINUOUS == 0, "later chunks have it cleared");
+        assert!(state.chunks[1].flags & BlockFlags::TRANSPORTING != 0, "state flags persist");
+    }
+}
+
+#[cfg(test)]
+mod modulation_tests {
+    //! The `Modulated` arms of the typed resolvers: the base is normalized through the call site's OWN mapping,
+    //! the sum is added in that space, the result is clamped and mapped back. A zero sum must reproduce the
+    //! un-modulated value exactly, since that is what keeps an assigned-but-idle modulator inaudible.
+    use super::{bool_value, float_value, int_value, unit_value, ParamValue, PARAM_KIND_FLOAT, PARAM_KIND_INT,
+                PARAM_KIND_UNIT, PARAM_KIND_BOOL};
+    use math::value_mapping::{Decibel, Exponential, Linear, LinearInteger, ValueMapping};
+
+    const LINEAR: Linear = Linear {min: 20.0, max: 20000.0};
+    const EXPONENTIAL: Exponential = Exponential {min: 20.0, max: 20000.0};
+    const STEPS: LinearInteger = LinearInteger {min: 1, max: 16};
+
+    fn round_trips<M: ValueMapping<f32>>(real: f32, mapping: &M) {
+        let plain = float_value(ParamValue::Float(real), mapping);
+        let modulated = float_value(ParamValue::Modulated {base: real, kind: PARAM_KIND_FLOAT, sum: 0.0}, mapping);
+        assert!((plain - modulated).abs() <= plain.abs() * 1.0e-5, "a zero sum must round-trip: {plain} vs {modulated}");
+    }
+
+    #[test]
+    fn a_zero_sum_reproduces_the_unmodulated_value() {
+        round_trips(1000.0, &LINEAR);
+        round_trips(1000.0, &EXPONENTIAL);
+        round_trips(-6.0, &Decibel::default_volume());
+        assert_eq!(int_value(ParamValue::Int(7), &STEPS),
+                   int_value(ParamValue::Modulated {base: 7.0, kind: PARAM_KIND_INT, sum: 0.0}, &STEPS));
+        assert_eq!(bool_value(ParamValue::Bool(true)),
+                   bool_value(ParamValue::Modulated {base: 1.0, kind: PARAM_KIND_BOOL, sum: 0.0}));
+    }
+
+    #[test]
+    fn the_sum_lands_where_the_mapping_says() {
+        // A stored 20 Hz is unit 0 on both mappings, so +0.5 must land on each mapping's own midpoint.
+        let linear = float_value(ParamValue::Modulated {base: 20.0, kind: PARAM_KIND_FLOAT, sum: 0.5}, &LINEAR);
+        assert!((linear - LINEAR.y(0.5)).abs() < 1.0e-3, "linear midpoint, got {linear}");
+        let exponential = float_value(ParamValue::Modulated {base: 20.0, kind: PARAM_KIND_FLOAT, sum: 0.5}, &EXPONENTIAL);
+        assert!((exponential - EXPONENTIAL.y(0.5)).abs() < 1.0e-1, "exponential midpoint, got {exponential}");
+        // An AUTOMATED base arrives already normalized, so no `x` is applied to it.
+        let automated = float_value(ParamValue::Modulated {base: 0.25, kind: PARAM_KIND_UNIT, sum: 0.25}, &LINEAR);
+        assert!((automated - LINEAR.y(0.5)).abs() < 1.0e-3, "unit base adds directly, got {automated}");
+    }
+
+    #[test]
+    fn the_sum_clamps_to_the_unit_interval() {
+        assert_eq!(float_value(ParamValue::Modulated {base: 0.9, kind: PARAM_KIND_UNIT, sum: 5.0}, &LINEAR), LINEAR.max);
+        assert_eq!(float_value(ParamValue::Modulated {base: 0.1, kind: PARAM_KIND_UNIT, sum: -5.0}, &LINEAR), LINEAR.min);
+        assert_eq!(int_value(ParamValue::Modulated {base: 0.0, kind: PARAM_KIND_UNIT, sum: 9.0}, &STEPS), STEPS.max);
+    }
+
+    #[test]
+    fn a_stepped_parameter_steps_and_a_toggle_flips() {
+        let up = int_value(ParamValue::Modulated {base: 1.0, kind: PARAM_KIND_INT, sum: 1.0 / 15.0}, &STEPS);
+        assert_eq!(up, 2, "one step of a 1..16 range is 1/15 of the unit interval");
+        assert!(bool_value(ParamValue::Modulated {base: 0.0, kind: PARAM_KIND_BOOL, sum: 0.6}), "a modulated toggle flips on");
+        assert!(!bool_value(ParamValue::Modulated {base: 1.0, kind: PARAM_KIND_BOOL, sum: -0.6}), "and back off");
+    }
+
+    #[test]
+    fn unit_value_resolves_every_kind_to_the_unit_interval() {
+        assert_eq!(unit_value(ParamValue::Unit(0.25), &LINEAR), 0.25);
+        assert_eq!(unit_value(ParamValue::Float(LINEAR.y(0.75)), &LINEAR), 0.75);
+        let modulated = unit_value(ParamValue::Modulated {base: LINEAR.y(0.25), kind: PARAM_KIND_FLOAT, sum: 0.5}, &LINEAR);
+        assert!((modulated - 0.75).abs() < 1.0e-5, "normalize, add, clamp; got {modulated}");
+    }
+}

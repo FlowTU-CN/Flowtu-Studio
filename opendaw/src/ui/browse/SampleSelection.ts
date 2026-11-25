@@ -1,0 +1,127 @@
+import {Arrays, asDefined, RuntimeNotifier, UUID} from "@opendaw/lib-std"
+import {AudioFileBox} from "@opendaw/studio-boxes"
+import {InstrumentFactories, Sample} from "@opendaw/studio-adapters"
+import {
+    AudioContentFactory,
+    PresetStorage,
+    ProjectStorage,
+    SampleStorage,
+    TemplateStorage
+} from "@opendaw/studio-core"
+import {HTMLSelection} from "@/ui/HTMLSelection"
+import {StudioService} from "@/service/StudioService"
+import {Dialogs} from "../components/dialogs"
+import {ResourceSelection, truncateList} from "@/ui/browse/ResourceSelection"
+
+export class SampleSelection implements ResourceSelection<Sample> {
+    readonly #service: StudioService
+    readonly #selection: HTMLSelection
+
+    constructor(service: StudioService, selection: HTMLSelection) {
+        this.#service = service
+        this.#selection = selection
+    }
+
+    async requestDevice(samples: ReadonlyArray<Sample>): Promise<void> {
+        const hasNoProfile = !this.#service.hasProfile
+        if (hasNoProfile) {
+            await this.#service.newProject()
+            if (!this.#service.hasProfile) {return}
+        }
+        const project = this.#service.project
+        const {editing, boxGraph} = project
+        editing.modify(() => {
+            if (hasNoProfile && samples.length === 1 && samples[0].bpm > 0) {project.api.setBpm(samples[0].bpm)}
+            samples.forEach(sample => {
+                const {uuid: uuidAsString, name, duration: durationInSeconds, bpm} = sample
+                const uuid = UUID.parse(uuidAsString)
+                const {trackBox, instrumentBox} = project.api.createInstrument(InstrumentFactories.Tape)
+                instrumentBox.label.setValue(name)
+                const audioFileBox = boxGraph.findBox<AudioFileBox>(uuid)
+                    .unwrapOrElse(() => AudioFileBox.create(boxGraph, uuid, box => {
+                        box.fileName.setValue(name)
+                        box.startInSeconds.setValue(0)
+                        box.endInSeconds.setValue(durationInSeconds)
+                    }))
+                if (bpm === 0) {
+                    AudioContentFactory.createNotStretchedRegion({
+                        boxGraph,
+                        sample,
+                        audioFileBox,
+                        position: 0,
+                        targetTrack: trackBox
+                    })
+                } else {
+                    AudioContentFactory.createPitchStretchedRegion({
+                        boxGraph,
+                        sample,
+                        audioFileBox,
+                        position: 0,
+                        targetTrack: trackBox
+                    })
+                }
+            })
+        })
+    }
+
+    async deleteItems(samples: ReadonlyArray<Sample>): Promise<ReadonlyArray<Sample>> {
+        const dialog = RuntimeNotifier.progress({headline: "Checking Sample Usages"})
+        const [usedByProjects, usedByTemplates, usedByPresets] = await Promise.all([
+            ProjectStorage.listUsedAssets(AudioFileBox),
+            TemplateStorage.listUsedAssets(AudioFileBox),
+            PresetStorage.listUsedAssets(AudioFileBox)
+        ])
+        this.#service.projectProfileService.getValue().ifSome(profile => {
+            const projectName = profile.meta.name
+            for (const box of this.#service.project.boxGraph.boxes()) {
+                if (!(box instanceof AudioFileBox)) {continue}
+                const key = UUID.toString(box.address.uuid)
+                const list = usedByProjects.get(key) ?? []
+                if (!list.includes(projectName)) {list.push(projectName)}
+                usedByProjects.set(key, list)
+            }
+        })
+        dialog.terminate()
+        const deletable: Array<Sample> = []
+        for (const sample of samples) {
+            const isOnline = sample.origin === "openDAW"
+            const projectRefs = usedByProjects.get(sample.uuid) ?? []
+            const templateRefs = usedByTemplates.get(sample.uuid) ?? []
+            const presetRefs = usedByPresets.get(sample.uuid) ?? []
+            if (!isOnline && (projectRefs.length > 0 || templateRefs.length > 0 || presetRefs.length > 0)) {
+                const lines: Array<string> = []
+                if (projectRefs.length > 0) {
+                    lines.push(`Used by project(s): ${truncateList(projectRefs)}`)
+                }
+                if (templateRefs.length > 0) {
+                    lines.push(`Used by template(s): ${truncateList(templateRefs)}`)
+                }
+                if (presetRefs.length > 0) {
+                    lines.push(`Used by preset(s): ${truncateList(presetRefs)}`)
+                }
+                await Dialogs.info({
+                    headline: "Cannot Delete Sample",
+                    message: `${sample.name}\n${lines.join("\n")}`
+                })
+            } else {
+                deletable.push(sample)
+            }
+        }
+        if (deletable.length === 0) {return Arrays.empty()}
+        const approved = await Dialogs.approve({
+            headline: "Remove Sample(s)?",
+            message: "This cannot be undone!",
+            approveText: "Remove"
+        })
+        if (!approved) {return Arrays.empty()}
+        for (const {uuid} of deletable) {
+            await SampleStorage.get().deleteItem(UUID.parse(uuid))
+        }
+        return deletable
+    }
+
+    selected(): ReadonlyArray<Sample> {
+        const selected = this.#selection.getSelected()
+        return selected.map(element => JSON.parse(asDefined(element.getAttribute("data-selection"))) as Sample)
+    }
+}

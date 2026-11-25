@@ -1,0 +1,15 @@
+{
+  "name": "flowtu-opendaw",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "license": "AGPL-3.0-or-later",
+  "packageManager": "pnpm@11.25.0",
+  "scripts": {
+    "setup": "pnpm --dir opendaw install --frozen-lockfile",
+    "dev": "pnpm --dir opendaw dev",
+    "build": "node scripts/build.mjs",
+    "preview": "pnpm --dir opendaw preview",
+    "typecheck": "pnpm --dir opendaw exec tsc --project tsconfig.flowtu.json --noEmit"
+  }
+}

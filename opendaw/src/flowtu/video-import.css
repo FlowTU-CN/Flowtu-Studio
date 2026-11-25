@@ -1,0 +1,27 @@
+.flowtu-video-import{box-sizing:border-box;max-width:calc(100vw - 32px);width:500px;max-height:calc(100vh - 32px);overflow:auto;margin:auto;padding:28px;background:linear-gradient(145deg,#1b2c40,#0e1926);color:#e8edf4;border:1px solid #4f6c89;border-radius:22px;box-shadow:0 24px 70px #0009;font:15px/1.5 system-ui;z-index:100}
+.flowtu-video-import::backdrop{background:#02060cc9;backdrop-filter:blur(5px)}
+.flowtu-video-import h2{margin:0 0 10px;font-size:23px;font-weight:600}
+.flowtu-video-import .video-import-name{color:#9bcfff;overflow-wrap:anywhere;margin:0 0 24px}
+.flowtu-video-import .video-import-audio{display:flex;gap:12px;align-items:flex-start;padding:16px;border:1px solid #536c8559;border-radius:12px;background:#26425c55;cursor:pointer;font-weight:600}
+.flowtu-video-import input{accent-color:#5aaff8;width:18px;height:18px;margin:3px 0 0;flex:none}
+.flowtu-video-import small{display:block;margin-top:3px;font-size:14px;font-weight:400;color:#b9c9d9}
+.flowtu-video-import .video-import-hint{font-size:14px;color:#bac8d6;margin:18px 0 24px}
+.flowtu-video-import footer{display:flex;justify-content:flex-end;gap:10px}
+.flowtu-video-import button{border:1px solid #536a82;border-radius:20px;padding:9px 22px;background:#26374a;color:#e8edf4;font:inherit;cursor:pointer}
+.flowtu-video-import button:hover{background:#34516e}
+.flowtu-video-import .video-import-confirm{background:#2479c7;border-color:#589bd6;color:white}
+.flowtu-video-import :focus-visible{outline:2px solid #ff9b47;outline-offset:3px}
+.ft-media-import{width:380px}
+.ft-media-import fieldset{display:grid;gap:8px;margin:0 0 22px;padding:0;border:0;min-width:0}
+.ft-media-import legend{font-size:13px;color:#b1c4d6;margin-bottom:8px}
+.ft-media-import label{display:flex;gap:10px;align-items:flex-start;padding:9px 12px;border:1px solid #44596d;border-radius:8px;cursor:pointer}
+.ft-media-import label:has(:checked){background:#203950;border-color:#6b9fc9}
+.ft-media-import label:has(:disabled){opacity:.5}
+.ft-media-import select{margin-left:30px;max-width:calc(100% - 30px);font:inherit;background:#172533;color:#e8edf4;border:1px solid #44596d;border-radius:6px;padding:5px 8px}
+.ft-media-import select:disabled{display:none}
+.ft-track-samples form{display:grid;gap:12px}
+.ft-track-samples label{display:grid;gap:4px;color:#c4d5e5}
+.ft-track-samples select{width:100%;padding:8px;color:#e8edf4;background:#152332;border:1px solid #526a80;border-radius:6px}
+.ft-track-samples output{font-size:13px;color:#b6cbde}
+.ft-track-samples [data-import]{justify-self:start}
+.ft-track-samples button:disabled{opacity:.5;cursor:default}

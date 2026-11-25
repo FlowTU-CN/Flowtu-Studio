@@ -1,0 +1,84 @@
+import {Terminator} from "@opendaw/lib-std"
+import {createElement, Frag, Router} from "@opendaw/lib-jsx"
+import {WorkspacePage} from "@/ui/workspace/WorkspacePage.tsx"
+import {StudioService} from "@/service/StudioService.ts"
+import {ComponentsPage} from "@/ui/pages/ComponentsPage.tsx"
+import {IconsPage} from "@/ui/pages/IconsPage.tsx"
+import {AutomationPage} from "@/ui/pages/AutomationPage.tsx"
+import {SampleUploadPage} from "@/ui/pages/SampleUploadPage.tsx"
+import {subscribeFavicon} from "./favicon"
+import {Footer} from "@/ui/Footer"
+import {RoomStatus} from "@/ui/RoomStatus"
+import {ChatOverlay} from "@/ui/ChatOverlay"
+import {ColorsPage} from "@/ui/pages/ColorsPage"
+import {Header} from "@/ui/header/Header"
+import {ErrorsPage} from "@/ui/pages/ErrorsPage.tsx"
+import {ImprintPage} from "@/ui/pages/ImprintPage.tsx"
+import {GraphPage} from "@/ui/pages/GraphPage"
+import {SignalGraphPage} from "@/ui/pages/SignalGraphPage"
+import {CodeEditorPage} from "@/ui/pages/CodeEditorPage"
+import {OpenBundlePage} from "@/ui/pages/OpenBundlePage"
+import {OpenProjectPage} from "@/ui/pages/OpenProjectPage"
+import {DashboardPage} from "@/ui/pages/stats/DashboardPage"
+import {PrivacyPage} from "@/ui/pages/PrivacyPage"
+import {ManifestoPage} from "@/ui/pages/ManifestoPage"
+import {PreferencesPage} from "@/ui/pages/PreferencesPage"
+import {StoragePage} from "@/ui/pages/StoragePage"
+import {TestPage} from "@/ui/pages/TestPage"
+import {JoinRoomPage} from "@/ui/pages/JoinRoomPage"
+import {PerformancePage} from "@/ui/pages/PerformancePage"
+import {SampleReadPage} from "@/ui/pages/SampleReadPage"
+
+export const App = (service: StudioService) => {
+    const terminator = new Terminator()
+    terminator.own(subscribeFavicon(service.roomAwareness))
+    return (
+        <Frag>
+            <RoomStatus lifecycle={terminator} service={service}/>
+            <Header lifecycle={new Terminator()} service={service}/>
+            <Router
+                runtime={terminator}
+                service={service}
+                fallback={() => (
+                    <div style={{flex: "1 0 0", display: "flex", justifyContent: "center", alignItems: "center"}}>
+                        <span style={{fontSize: "50vmin"}}>404</span>
+                    </div>
+                )}
+                routes={[
+                    {path: "/", factory: WorkspacePage, reuse: true},
+                    {path: "/create", factory: WorkspacePage, reuse: true},
+                    {path: "/preferences", factory: PreferencesPage},
+                    {path: "/storage", factory: StoragePage},
+                    {path: "/imprint", factory: ImprintPage},
+                    {path: "/privacy", factory: PrivacyPage},
+                    {path: "/manifesto", factory: ManifestoPage},
+                    {path: "/icons", factory: IconsPage},
+                    {path: "/code", factory: CodeEditorPage},
+                    {path: "/scripting", factory: CodeEditorPage},
+                    {path: "/components", factory: ComponentsPage},
+                    {path: "/automation", factory: AutomationPage},
+                    {path: "/errors", factory: ErrorsPage},
+                    {path: "/upload", factory: SampleUploadPage},
+                    {path: "/colors", factory: ColorsPage},
+                    {path: "/graph", factory: GraphPage},
+                    {path: "/signal-graph", factory: SignalGraphPage},
+                    {path: "/stats", factory: DashboardPage},
+                    {
+                        path: "/users", factory: (context) => {
+                            history.replaceState(null, "", "/stats")
+                            return DashboardPage(context)
+                        }
+                    },
+                    {path: "/open-bundle/*", factory: OpenBundlePage},
+                    {path: "/open-project", factory: OpenProjectPage},
+                    {path: "/test", factory: TestPage},
+                    {path: "/performance", factory: PerformancePage},
+                    {path: "/performance/sample-read", factory: SampleReadPage},
+                    {path: "/join/*", factory: JoinRoomPage}
+                ]}
+            />
+            <ChatOverlay lifecycle={terminator} service={service}/>
+            <Footer lifecycle={terminator} service={service}/>
+        </Frag>
+    )
+}

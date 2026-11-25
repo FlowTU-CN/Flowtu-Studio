@@ -1,0 +1,6 @@
+.flowtu-editor-range{position:absolute;top:0;bottom:0;background:#5aaff82d;border-left:1px solid #8dccff;border-right:1px solid #8dccff;pointer-events:none;z-index:2}
+.flowtu-editor-range[hidden]{display:none}
+.flowtu-editor-notice{position:absolute;left:6px;bottom:5px;max-width:calc(100% - 12px);padding:3px 6px;color:#d4e8fa;background:#0c1b2dd9;border-radius:4px;font:12px/1.4 system-ui;pointer-events:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;z-index:3}
+.flowtu-audio-editing{overflow:hidden}
+.flowtu-audio-editing canvas[data-fade-handle=curve]{cursor:ns-resize!important}
+.flowtu-audio-editing canvas[data-fade-handle=length]{cursor:ew-resize!important}

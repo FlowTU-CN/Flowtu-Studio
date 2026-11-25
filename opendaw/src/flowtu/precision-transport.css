@@ -1,0 +1,26 @@
+.flowtu-precision-transport {
+    display: inline-flex; position: relative; align-items: center; gap: 2px;
+    padding: 1px 3px; border: 1px solid #34424e; border-radius: 6px;
+    background: #10181f; font: 12px/1.3 system-ui; white-space: nowrap;
+}
+.flowtu-precision-transport .flowtu-menu-trigger, .flowtu-precision-transport .frame-step {
+    height: 23px; padding: 0 6px; border: 0; border-radius: 3px;
+    background: transparent; color: #acbac5; font: inherit; cursor: pointer;
+}
+.flowtu-precision-transport .flowtu-menu-trigger {gap: 3px}
+.flowtu-precision-transport .transport-position {
+    box-sizing: border-box; width: 119px; height: 25px; padding: 0 5px;
+    border: 0; border-inline: 1px solid #34424e; border-radius: 0;
+    background: transparent; color: #a7ddf3; font: 15px/1.2 ui-monospace, Menlo, monospace;
+    font-variant-numeric: tabular-nums; text-align: center;
+}
+.flowtu-precision-transport .flowtu-menu-trigger:hover, .flowtu-precision-transport .frame-step:hover {background: #233643; color: #e4f2fa}
+.flowtu-precision-transport .flowtu-menu-panel label {justify-content: space-between; padding: 3px 4px; gap: 14px}
+.flowtu-precision-transport .flowtu-menu-panel select {min-width: 105px}
+.flowtu-precision-transport .transport-error {position: absolute; top: 100%; left: 0; z-index: 100; padding: 5px 8px; border-radius: 5px; background: #402b26; color: #ffe0cd}
+.flowtu-precision-transport [aria-invalid=true] {outline: 1px solid #ff927f}
+.flowtu-precision-transport :focus-visible {outline: 2px solid #9edafa; outline-offset: 0}
+.flowtu-precision-transport button:disabled {opacity: .45; cursor: default}
+.flowtu-range-tools .range-time-field{display:flex;gap:5px;align-items:center;color:#adc4da;font:12px system-ui;flex:none}.flowtu-range-tools .range-time-field input{box-sizing:border-box;width:132px;border:1px solid #496987;border-radius:5px;background:#102235;color:#e4f3ff;padding:5px 7px;min-height:30px;font:13px ui-monospace,SFMono-Regular,Menlo,monospace;font-variant-numeric:tabular-nums}.flowtu-range-tools .range-time-field input:focus{outline:2px solid #63b5f5;outline-offset:1px}.flowtu-range-tools .range-time-field input:disabled{opacity:.4}.flowtu-range-tools .range-time-field input[aria-invalid=true]{border-color:#ff927f}
+.flowtu-precision-transport .ft-transport-nav {display:inline-grid;place-items:center;width:22px;padding:0}
+.flowtu-precision-transport .ft-transport-nav svg {width:16px;height:16px}

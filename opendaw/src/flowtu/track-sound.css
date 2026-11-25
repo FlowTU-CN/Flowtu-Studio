@@ -1,0 +1,17 @@
+.ft-track-sound {
+    margin: auto; width: min(400px, 94vw); max-height: 90dvh; padding: 0;
+    background: #14212d; color: #e8f1f7; border: 1px solid #42596c; border-radius: 12px;
+    box-shadow: 0 18px 65px #000a; color-scheme: dark;
+}
+.ft-track-sound::backdrop { background: #03080d99; }
+.ft-track-sound form { display: grid; gap: 10px; padding: 16px; font: 13px/1.4 system-ui, sans-serif; }
+.ft-track-sound header, .ft-track-sound footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.ft-track-sound h3 { margin: 0; font-size: 15px; overflow-wrap: anywhere; }
+.ft-track-sound input, .ft-track-sound select { width: 100%; box-sizing: border-box; background: #0c1722; color: inherit; border: 1px solid #3b5367; border-radius: 6px; padding: 7px; font: inherit; }
+.ft-track-sound select { max-height: 48dvh; min-height: 80px; }
+.ft-track-sound optgroup { color: #9cb2c7; font-style: normal; padding-top: 4px; }
+.ft-track-sound option { color: #edf3f8; padding: 4px 8px; }
+.ft-track-sound button { border-radius: 6px; padding: 6px 10px; cursor: pointer; background: #223747; color: #dce7ef; border: 1px solid #3f596d; font: inherit; }
+.ft-track-sound button[type=submit] { background: #a8d6fb; color: #112233; border-color: transparent; font-weight: 650; }
+.ft-track-sound button:disabled { opacity: .45; cursor: default; }
+.ft-track-sound output { color: #a7bacb; }

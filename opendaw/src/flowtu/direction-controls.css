@@ -1,0 +1,24 @@
+.ft-direction-controls {display:grid;gap:8px;min-width:0}
+.ft-direction-controls > label {gap:4px}
+.ft-direction-controls > label select {width:100%}
+.ft-direction-pads {display:grid;gap:6px}
+.ft-direction-pads details {min-width:0;border:1px solid #324758;background:#101b26;border-radius:7px}
+.ft-direction-pads summary {display:flex;align-items:center;justify-content:space-between;gap:4px;padding:6px 9px;color:#d9e5ee;cursor:pointer;font:600 12px/1.35 system-ui;list-style:none}
+.ft-direction-pads summary::-webkit-details-marker {display:none}
+.ft-direction-pads summary::after {content:"";width:6px;height:6px;border:solid #9bb0bf;border-width:0 1px 1px 0;transform:rotate(-45deg)}
+.ft-direction-pads details[open] summary::after {transform:rotate(45deg)}
+.ft-direction-body {padding:3px 10px 10px;display:grid;grid-template-columns:minmax(54px,92px) minmax(0,1fr);align-items:center;gap:12px}
+.ft-score .ft-direction-pads button.ft-direction-wheel {appearance:none;outline:none;-webkit-tap-highlight-color:transparent;user-select:none;position:relative;width:100%;aspect-ratio:1;box-sizing:border-box;min-height:0;padding:0;border:1px solid #496071;border-radius:50%;touch-action:none;cursor:crosshair;background:linear-gradient(90deg,transparent calc(50% - .5px),#3c4e5e 50%,transparent calc(50% + .5px)),linear-gradient(0deg,transparent calc(50% - .5px),#3c4e5e 50%,transparent calc(50% + .5px)),radial-gradient(circle at center,#1c2e3e,#101a25 82%);color:#a6bacb}
+.ft-direction-wheel i {position:absolute;width:9px;height:9px;border-radius:50%;transform:translate(-50%,-50%);background:#a7d6f1;border:1.5px solid #d5eafb;box-shadow:0 0 0 3px #66b9ea40;pointer-events:none}
+.ft-direction-wheel:active i {background:#e1f3ff;box-shadow:0 0 0 4px #8ac8e75c}
+.ft-direction-wheel:focus-visible i {outline:2px solid #d1ebfc;outline-offset:3px}
+.ft-direction-values {display:grid;gap:7px;min-width:0}
+.ft-score .ft-direction-values label {display:grid;grid-template-columns:minmax(0,1fr) 42px;align-items:center;column-gap:4px;row-gap:1px;font-size:11px}
+.ft-direction-values label > span {min-width:0;overflow-wrap:anywhere}
+.ft-direction-values small {grid-column:1;color:#95aabd;font:10px/1.2 system-ui;overflow-wrap:anywhere}
+.ft-score .ft-direction-values input[type=number] {grid-column:2;grid-row:1/span 2;width:42px;height:24px;min-width:0;box-sizing:border-box;padding:2px 3px;border-radius:4px;appearance:textfield;text-align:center;font:11px/1.2 ui-monospace,monospace}
+.ft-direction-values input::-webkit-inner-spin-button {appearance:none}
+.ft-direction-brief {font:11px/1.45 system-ui;color:#aec6d9}
+
+.ft-direction-result {padding:0 10px 10px}
+.ft-direction-result p {margin:0 0 6px;white-space:pre-wrap;overflow-wrap:anywhere;color:#c4d2dd;font-size:12px}

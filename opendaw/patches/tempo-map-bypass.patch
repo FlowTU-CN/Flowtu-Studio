@@ -1,0 +1,278 @@
+diff --git a/dist/VaryingTempoMap.js b/dist/VaryingTempoMap.js
+--- a/dist/VaryingTempoMap.js
++++ b/dist/VaryingTempoMap.js
+@@ -10,149 +10,84 @@
+     return (kind === "a" ? f.call(receiver, value) : f ? f.value = value : state.set(receiver, value)), value;
+ };
+-var _TempoGridCursor_instances, _TempoGridCursor_events, _TempoGridCursor_storageBpm, _TempoGridCursor_segmentIndex, _TempoGridCursor_lastPPQN, _TempoGridCursor_lastBpm, _TempoGridCursor_m, _TempoGridCursor_q, _TempoGridCursor_reset, _TempoGridCursor_bpmAt, _TempoGridCursor_zoneAt, _VaryingTempoMap_instances, _VaryingTempoMap_terminator, _VaryingTempoMap_adapter, _VaryingTempoMap_ppqnCache, _VaryingTempoMap_secondsCache, _VaryingTempoMap_cursor, _VaryingTempoMap_ivFrom, _VaryingTempoMap_ivTo, _VaryingTempoMap_ivSeconds, _VaryingTempoMap_rebuildCache, _VaryingTempoMap_ppqnToSecondsPositive, _VaryingTempoMap_absoluteSecondsToPPQN;
+-import { PPQN, TempoChangeGrid } from "@opendaw/lib-dsp";
+-import { BinarySearch, Curve, NumberComparator, quantizeCeil, quantizeFloor, Terminator } from "@opendaw/lib-std";
+-/**
+- * Allocation-free cursor that walks the TempoChangeGrid as a step function: tempo is constant within
+- * each grid cell and sampled at the cell's grid-aligned start (matching BlockRenderer). Tracks the
+- * current segment and the recurrence coefficients m, q so a step of exactly TempoChangeGrid within the
+- * same zone resolves as v = m * v + q. Because every cell is sampled at its grid origin, the walk is
+- * additive: integrate(a, c) === integrate(a, b) + integrate(b, c) for any b.
+- */
++var _VaryingTempoMap_instances, _VaryingTempoMap_terminator, _VaryingTempoMap_adapter, _VaryingTempoMap_ppqnCache, _VaryingTempoMap_secondsCache, _VaryingTempoMap_cursor, _VaryingTempoMap_ivFrom, _VaryingTempoMap_ivTo, _VaryingTempoMap_ivSeconds, _VaryingTempoMap_rebuildCache, _VaryingTempoMap_ppqnToSecondsPositive, _VaryingTempoMap_absoluteSecondsToPPQN;
++import { PPQN } from "@opendaw/lib-dsp";
++import { BinarySearch, Curve, NumberComparator, Option, Terminator } from "@opendaw/lib-std";
++const activeTempoEvents = adapter => adapter.box.tempoTrack.enabled.getValue() ? adapter.tempoTrackEvents : Option.None;
++// The WASM renderer evaluates the tempo curve during playback. Integrate the same
++// BPM function over musical position so that seeking and ruler ticks match it.
++function spanSeconds(left, right, from, to, fallback) {
++    if (to <= from) return 0;
++    const beatsAt60 = PPQN.pulsesToSeconds(to - from, 1);
++    const start = left?.value ?? right?.value ?? fallback;
++    if (!left || !right || start === right.value || left.interpolation.type === "none") return beatsAt60 / start;
++
++    const length = right.position - left.position;
++    const x0 = (from - left.position) / length;
++    const x1 = (to - left.position) / length;
++    const delta = right.value - start;
++    const slope = left.interpolation.type === "linear" ? 0.5 : left.interpolation.slope;
++    if (Math.abs(slope - 0.5) < 0.000001) {
++        const bpm0 = start + delta * x0;
++        const ratio = delta * (x1 - x0) / bpm0;
++        return beatsAt60 / bpm0 * (ratio === 0 ? 1 : Math.log1p(ratio) / ratio);
++    }
++
++    // A bend is BPM(x) = a + b*exp(k*x). Evaluate its reciprocal integral;
++    // use the limiting form near a=0 to avoid subtracting similar numbers.
++    const p = Math.max(1e-15, Math.min(1 - 1e-15, slope));
++    const k = 2 * (Math.log1p(-p) - Math.log(p));
++    const a = start - delta / Math.expm1(k);
++    const bpmAt = x => start + delta * Curve.normalizedAt(x, p);
++    const bpm0 = bpmAt(x0);
++    const kd = k * (x1 - x0);
++    if (Math.abs(a) < 0.01 * bpm0) {
++        const v = Math.expm1(-kd) / bpm0;
++        return -beatsAt60 * (a === 0 ? v : Math.log1p(a * v) / a) / kd;
++    }
++    return beatsAt60 * (1 - Math.log1p((bpmAt(x1) - bpm0) / bpm0) / kd) / a;
++}
++
+ export class TempoGridCursor {
+-    constructor() {
+-        _TempoGridCursor_instances.add(this);
+-        _TempoGridCursor_events.set(this, []);
+-        _TempoGridCursor_storageBpm.set(this, 0.0);
+-        _TempoGridCursor_segmentIndex.set(this, -2);
+-        _TempoGridCursor_lastPPQN.set(this, Number.NEGATIVE_INFINITY);
+-        _TempoGridCursor_lastBpm.set(this, 0.0);
+-        _TempoGridCursor_m.set(this, 1.0);
+-        _TempoGridCursor_q.set(this, 0.0
+-        /**
+-         * Integrates the seconds elapsed across [fromPPQN, toPPQN] by stepping the TempoChangeGrid.
+-         */
+-        );
+-    }
+-    /**
+-     * Integrates the seconds elapsed across [fromPPQN, toPPQN] by stepping the TempoChangeGrid.
+-     */
+-    integrate(events, fromPPQN, toPPQN, storageBpm) {
+-        __classPrivateFieldGet(this, _TempoGridCursor_instances, "m", _TempoGridCursor_reset).call(this, events, storageBpm);
+-        let acc = 0.0;
+-        let current = fromPPQN;
+-        while (current < toPPQN) {
+-            const currentBpm = __classPrivateFieldGet(this, _TempoGridCursor_instances, "m", _TempoGridCursor_bpmAt).call(this, quantizeFloor(current, TempoChangeGrid));
+-            const nextGrid = quantizeCeil(current, TempoChangeGrid);
+-            const segmentEnd = nextGrid <= current ? nextGrid + TempoChangeGrid : nextGrid;
+-            const actualEnd = Math.min(segmentEnd, toPPQN);
+-            acc += PPQN.pulsesToSeconds(actualEnd - current, currentBpm);
+-            current = actualEnd;
+-        }
+-        return acc;
+-    }
+-    /**
+-     * Walks the TempoChangeGrid forward from fromPPQN, accumulating seconds starting at fromSeconds,
+-     * until targetSeconds is reached.
+-     */
+-    advance(events, fromPPQN, fromSeconds, targetSeconds, storageBpm) {
+-        __classPrivateFieldGet(this, _TempoGridCursor_instances, "m", _TempoGridCursor_reset).call(this, events, storageBpm);
+-        let accumulatedSeconds = fromSeconds;
+-        let accumulatedPPQN = fromPPQN;
+-        while (accumulatedSeconds < targetSeconds) {
+-            const currentBpm = __classPrivateFieldGet(this, _TempoGridCursor_instances, "m", _TempoGridCursor_bpmAt).call(this, quantizeFloor(accumulatedPPQN, TempoChangeGrid));
+-            const nextGrid = quantizeCeil(accumulatedPPQN, TempoChangeGrid);
+-            const segmentEnd = nextGrid <= accumulatedPPQN ? nextGrid + TempoChangeGrid : nextGrid;
+-            const segmentPPQN = segmentEnd - accumulatedPPQN;
+-            const segmentSeconds = PPQN.pulsesToSeconds(segmentPPQN, currentBpm);
+-            if (accumulatedSeconds + segmentSeconds >= targetSeconds) {
+-                accumulatedPPQN += PPQN.secondsToPulses(targetSeconds - accumulatedSeconds, currentBpm);
+-                break;
++    integrate(events, from, to, fallback) {
++        let seconds = 0;
++        let index = BinarySearch.rightMostMapped(events, from, NumberComparator, event => event.position);
++        while (from < to) {
++            const next = events[index + 1];
++            const end = Math.min(to, next?.position ?? Infinity);
++            seconds += spanSeconds(events[index], next, from, end, fallback);
++            from = end;
++            index++;
++        }
++        return seconds;
++    }
++
++    advance(events, from, fromSeconds, targetSeconds, fallback) {
++        let remaining = targetSeconds - fromSeconds;
++        let index = BinarySearch.rightMostMapped(events, from, NumberComparator, event => event.position);
++        while (remaining > 0) {
++            const left = events[index], right = events[index + 1];
++            if (!right) return from + PPQN.secondsToPulses(remaining, left?.value ?? fallback);
++            const span = spanSeconds(left, right, from, right.position, fallback);
++            if (remaining < span) {
++                if (!left || left.interpolation.type === "none" || left.value === right.value)
++                    return from + PPQN.secondsToPulses(remaining, left?.value ?? right.value);
++                let lo = from, hi = right.position;
++                for (let i = 0; i < 48 && hi - lo > 1e-8; i++) {
++                    const mid = (lo + hi) / 2;
++                    if (spanSeconds(left, right, from, mid, fallback) < remaining) lo = mid;
++                    else hi = mid;
++                }
++                return (lo + hi) / 2;
+             }
+-            accumulatedSeconds += segmentSeconds;
+-            accumulatedPPQN = segmentEnd;
+-        }
+-        return accumulatedPPQN;
++            remaining -= span;
++            from = right.position;
++            index++;
++        }
++        return from;
+     }
+ }
+-_TempoGridCursor_events = new WeakMap(), _TempoGridCursor_storageBpm = new WeakMap(), _TempoGridCursor_segmentIndex = new WeakMap(), _TempoGridCursor_lastPPQN = new WeakMap(), _TempoGridCursor_lastBpm = new WeakMap(), _TempoGridCursor_m = new WeakMap(), _TempoGridCursor_q = new WeakMap(), _TempoGridCursor_instances = new WeakSet(), _TempoGridCursor_reset = function _TempoGridCursor_reset(events, storageBpm) {
+-    __classPrivateFieldSet(this, _TempoGridCursor_events, events, "f");
+-    __classPrivateFieldSet(this, _TempoGridCursor_storageBpm, storageBpm, "f");
+-    __classPrivateFieldSet(this, _TempoGridCursor_segmentIndex, -2, "f");
+-    __classPrivateFieldSet(this, _TempoGridCursor_lastPPQN, Number.NEGATIVE_INFINITY, "f");
+-    __classPrivateFieldSet(this, _TempoGridCursor_lastBpm, 0.0, "f");
+-    __classPrivateFieldSet(this, _TempoGridCursor_m, 1.0, "f");
+-    __classPrivateFieldSet(this, _TempoGridCursor_q, 0.0, "f");
+-}, _TempoGridCursor_bpmAt = function _TempoGridCursor_bpmAt(position) {
+-    const events = __classPrivateFieldGet(this, _TempoGridCursor_events, "f");
+-    if (events.length === 0) {
+-        return __classPrivateFieldGet(this, _TempoGridCursor_storageBpm, "f");
+-    }
+-    const zone = __classPrivateFieldGet(this, _TempoGridCursor_instances, "m", _TempoGridCursor_zoneAt).call(this, position);
+-    if (zone === __classPrivateFieldGet(this, _TempoGridCursor_segmentIndex, "f") && position === __classPrivateFieldGet(this, _TempoGridCursor_lastPPQN, "f") + TempoChangeGrid) {
+-        __classPrivateFieldSet(this, _TempoGridCursor_lastPPQN, position, "f");
+-        return __classPrivateFieldSet(this, _TempoGridCursor_lastBpm, __classPrivateFieldGet(this, _TempoGridCursor_m, "f") * __classPrivateFieldGet(this, _TempoGridCursor_lastBpm, "f") + __classPrivateFieldGet(this, _TempoGridCursor_q, "f"), "f");
+-    }
+-    __classPrivateFieldSet(this, _TempoGridCursor_segmentIndex, zone, "f");
+-    __classPrivateFieldSet(this, _TempoGridCursor_lastPPQN, position, "f");
+-    if (zone < 0) {
+-        __classPrivateFieldSet(this, _TempoGridCursor_m, 1.0, "f");
+-        __classPrivateFieldSet(this, _TempoGridCursor_q, 0.0, "f");
+-        return __classPrivateFieldSet(this, _TempoGridCursor_lastBpm, zone === -1 ? events[0].value : events[events.length - 1].value, "f");
+-    }
+-    const a = events[zone];
+-    const b = events[zone + 1];
+-    const interpolation = a.interpolation;
+-    if (interpolation.type === "none") {
+-        __classPrivateFieldSet(this, _TempoGridCursor_m, 1.0, "f");
+-        __classPrivateFieldSet(this, _TempoGridCursor_q, 0.0, "f");
+-        return __classPrivateFieldSet(this, _TempoGridCursor_lastBpm, a.value, "f");
+-    }
+-    else if (interpolation.type === "linear") {
+-        __classPrivateFieldSet(this, _TempoGridCursor_m, 1.0, "f");
+-        __classPrivateFieldSet(this, _TempoGridCursor_q, (b.value - a.value) * TempoChangeGrid / (b.position - a.position), "f");
+-        return __classPrivateFieldSet(this, _TempoGridCursor_lastBpm, a.value + (position - a.position) / (b.position - a.position) * (b.value - a.value), "f");
+-    }
+-    else {
+-        const { m, q } = Curve.coefficients({
+-            slope: interpolation.slope,
+-            steps: (b.position - a.position) / TempoChangeGrid,
+-            y0: a.value,
+-            y1: b.value
+-        });
+-        __classPrivateFieldSet(this, _TempoGridCursor_m, m, "f");
+-        __classPrivateFieldSet(this, _TempoGridCursor_q, q, "f");
+-        return __classPrivateFieldSet(this, _TempoGridCursor_lastBpm, Curve.valueAt({
+-            slope: interpolation.slope,
+-            steps: b.position - a.position,
+-            y0: a.value,
+-            y1: b.value
+-        }, position - a.position), "f");
+-    }
+-}, _TempoGridCursor_zoneAt = function _TempoGridCursor_zoneAt(position) {
+-    const events = __classPrivateFieldGet(this, _TempoGridCursor_events, "f");
+-    if (position < events[0].position) {
+-        return -1;
+-    }
+-    const last = events.length - 1;
+-    if (position >= events[last].position) {
+-        return -3;
+-    }
+-    let low = 0;
+-    let high = last;
+-    while (low < high) {
+-        const mid = (low + high + 1) >> 1;
+-        if (events[mid].position <= position) {
+-            low = mid;
+-        }
+-        else {
+-            high = mid - 1;
+-        }
+-    }
+-    return low;
+-};
+ /**
+  * TempoMap implementation that handles varying tempo (tempo automation).
+- * Steps through at TempoChangeGrid intervals to match BlockRenderer behavior.
++ * Integrates native curve segments for musical and absolute time conversions.
+  */
+ export class VaryingTempoMap {
+@@ -175,5 +110,5 @@
+     getTempoAt(position) {
+         const storageBpm = __classPrivateFieldGet(this, _VaryingTempoMap_adapter, "f").box.bpm.getValue();
+-        return __classPrivateFieldGet(this, _VaryingTempoMap_adapter, "f").tempoTrackEvents.mapOr(collection => collection.valueAt(position, storageBpm), storageBpm);
++        return activeTempoEvents(__classPrivateFieldGet(this, _VaryingTempoMap_adapter, "f")).mapOr(collection => collection.valueAt(position, storageBpm), storageBpm);
+     }
+     ppqnToSeconds(position) {
+@@ -191,5 +126,5 @@
+         }
+         const storageBpm = __classPrivateFieldGet(this, _VaryingTempoMap_adapter, "f").box.bpm.getValue();
+-        const tempoEvents = __classPrivateFieldGet(this, _VaryingTempoMap_adapter, "f").tempoTrackEvents;
++        const tempoEvents = activeTempoEvents(__classPrivateFieldGet(this, _VaryingTempoMap_adapter, "f"));
+         if (tempoEvents.isEmpty()) {
+             return PPQN.pulsesToSeconds(toPPQN - fromPPQN, storageBpm);
+@@ -228,5 +163,5 @@
+     __classPrivateFieldGet(this, _VaryingTempoMap_secondsCache, "f").length = 0;
+     __classPrivateFieldSet(this, _VaryingTempoMap_ivFrom, Number.NaN, "f");
+-    const tempoEvents = __classPrivateFieldGet(this, _VaryingTempoMap_adapter, "f").tempoTrackEvents;
++    const tempoEvents = activeTempoEvents(__classPrivateFieldGet(this, _VaryingTempoMap_adapter, "f"));
+     if (tempoEvents.isEmpty()) {
+         return;
+@@ -258,5 +193,5 @@
+     }
+     const storageBpm = __classPrivateFieldGet(this, _VaryingTempoMap_adapter, "f").box.bpm.getValue();
+-    const tempoEvents = __classPrivateFieldGet(this, _VaryingTempoMap_adapter, "f").tempoTrackEvents;
++    const tempoEvents = activeTempoEvents(__classPrivateFieldGet(this, _VaryingTempoMap_adapter, "f"));
+     if (tempoEvents.isEmpty()) {
+         return PPQN.pulsesToSeconds(position, storageBpm);
+@@ -286,5 +221,5 @@
+     }
+     const storageBpm = __classPrivateFieldGet(this, _VaryingTempoMap_adapter, "f").box.bpm.getValue();
+-    const tempoEvents = __classPrivateFieldGet(this, _VaryingTempoMap_adapter, "f").tempoTrackEvents;
++    const tempoEvents = activeTempoEvents(__classPrivateFieldGet(this, _VaryingTempoMap_adapter, "f"));
+     if (tempoEvents.isEmpty()) {
+         return PPQN.secondsToPulses(targetSeconds, storageBpm);
+diff --git a/dist/timeline/region/FadingAdapter.js b/dist/timeline/region/FadingAdapter.js
+--- a/dist/timeline/region/FadingAdapter.js
++++ b/dist/timeline/region/FadingAdapter.js
+@@ -31,6 +31,12 @@
+         target.inSlope.setValue(this.inSlope);
+         target.outSlope.setValue(this.outSlope);
++        const source = __classPrivateFieldGet(this, _FadingAdapter_fading, "f");
++        target.inEqualPower.setValue(source.inEqualPower.getValue());
++        target.outEqualPower.setValue(source.outEqualPower.getValue());
+     }
+     reset() {
++        const source = __classPrivateFieldGet(this, _FadingAdapter_fading, "f");
++        source.inEqualPower.setValue(false);
++        source.outEqualPower.setValue(false);
+         __classPrivateFieldGet(this, _FadingAdapter_fading, "f").in.setValue(0.0);
+         __classPrivateFieldGet(this, _FadingAdapter_fading, "f").out.setValue(0.0);

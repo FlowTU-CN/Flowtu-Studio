@@ -1,0 +1,141 @@
+import css from "./TimeCodeInput.sass?inline"
+import {
+    checkIndex,
+    int,
+    isInstanceOf,
+    Lifecycle,
+    MutableObservableValue,
+} from "@opendaw/lib-std"
+import {ClipboardPayload} from "./ClipboardPayload"
+import {createElement} from "@opendaw/lib-jsx"
+import {ppqn, PPQN} from "@opendaw/lib-dsp"
+import {Events, Html} from "@opendaw/lib-dom"
+import {StudioPreferences} from "@opendaw/studio-core"
+
+const defaultClassName = Html.adoptStyleSheet(css, "TimeCodeInput")
+
+type Construct = {
+    lifecycle: Lifecycle
+    model: MutableObservableValue<ppqn>
+    className?: string
+    negativeWarning?: boolean
+    signature?: [int, int]
+    oneBased?: boolean
+}
+
+export const TimeCodeInput = ({lifecycle, model, className, negativeWarning, signature, oneBased}: Construct) => {
+    const upper = signature?.at(0) ?? 4
+    const lower = signature?.at(1) ?? 4
+    const units = [
+        {amount: PPQN.Bar, maxChars: 3},
+        {amount: PPQN.Quarter, maxChars: 1},
+        {amount: PPQN.SemiQuaver, maxChars: 1},
+        {amount: 1, maxChars: 3}
+    ]
+    const subOffset = oneBased === true ? 1 : 0
+    const barOffset = () => oneBased === true
+        ? StudioPreferences.settings["time-display"]["count-bars-from-zero"] ? 0 : 1
+        : 0
+    const inputs: ReadonlyArray<HTMLElement> = units.map(({maxChars}) => (
+        <div contentEditable="true" style={{width: `calc(0.5em + ${maxChars * 6 + 1}px)`}}/>
+    ))
+    const element: HTMLElement = (
+        <div className={Html.buildClassList(defaultClassName, className)}>
+            {inputs}
+        </div>
+    )
+    const updateDigits = () => {
+        const value = model.getValue()
+        const negative = value < 0
+        element.classList.toggle("negative", negativeWarning === true && negative)
+        const {bars, beats, semiquavers, ticks} = PPQN.toParts(value, upper, lower)
+        inputs[0].textContent = negative ? String(bars) : String(bars + barOffset()).padStart(3, "0")
+        inputs[1].textContent = String(beats + subOffset)
+        inputs[2].textContent = String(semiquavers + subOffset)
+        inputs[3].textContent = String(ticks).padStart(3, "0")
+    }
+    if (oneBased === true) {
+        lifecycle.own(StudioPreferences.subscribe(updateDigits, "time-display", "count-bars-from-zero"))
+    }
+    const commit = () => {
+        const part = (index: int): int => parseInt(inputs[index].textContent ?? "") | 0
+        const bars = model.getValue() >= 0 ? part(0) - barOffset() : part(0)
+        model.setValue(units[0].amount * bars
+            + units[1].amount * (part(1) - subOffset)
+            + units[2].amount * (part(2) - subOffset)
+            + units[3].amount * part(3))
+        updateDigits()
+    }
+    lifecycle.ownAll(
+        model.subscribe(updateDigits),
+        Events.subscribe(element, "focusin", (event: Event) => {
+            if (!isInstanceOf(event.target, HTMLElement)) {return}
+            Html.selectContent(event.target)
+        }),
+        Events.subscribe(element, "focusout", (event: FocusEvent) => {
+            if (!isInstanceOf(event.target, HTMLElement)) {return}
+            if (isInstanceOf(event.relatedTarget, Node) && element.contains(event.relatedTarget)) {return}
+            commit()
+            Html.unselectContent(event.target)
+        }),
+        Events.subscribe(element, "copy", (event: ClipboardEvent) => {
+            event.preventDefault()
+            event.clipboardData?.setData("application/json", ClipboardPayload.write("timecode", model.getValue()))
+        }),
+        Events.subscribe(element, "paste", (event: ClipboardEvent) => {
+            ClipboardPayload.read(event.clipboardData?.getData("application/json"), "timecode").ifSome(value => {
+                event.preventDefault()
+                model.setValue(Number(value ?? 0))
+            })
+        }),
+        Events.subscribe(element, "keydown", (event: KeyboardEvent) => {
+            if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {return}
+            const target = event.target
+            if (!isInstanceOf(target, HTMLElement)) {return}
+            const index = checkIndex(inputs.indexOf(target), inputs)
+            switch (event.code) {
+                case "ArrowUp": {
+                    event.preventDefault()
+                    model.setValue(model.getValue() + units[index].amount)
+                    Html.selectContent(target)
+                    break
+                }
+                case "ArrowDown": {
+                    event.preventDefault()
+                    model.setValue(model.getValue() - units[index].amount)
+                    Html.selectContent(target)
+                    break
+                }
+                case "Enter": {
+                    event.preventDefault()
+                    commit()
+                    Html.selectContent(target)
+                    break
+                }
+                case "Digit1":
+                case "Digit2":
+                case "Digit3":
+                case "Digit4":
+                case "Digit5":
+                case "Digit6":
+                case "Digit7":
+                case "Digit8":
+                case "Digit9":
+                case "Digit0":
+                case "Tab":
+                case "ArrowLeft":
+                case "ArrowRight":
+                case "Minus":
+                case "Backspace": {
+                    break // Allow
+                }
+                default: {
+                    console.debug("ignore", event.code)
+                    event.preventDefault()
+                }
+            }
+        })
+    )
+    updateDigits()
+    return element
+}

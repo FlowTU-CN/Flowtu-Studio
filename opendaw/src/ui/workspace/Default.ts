@@ -1,0 +1,294 @@
+import {PanelState} from "@/ui/workspace/PanelState.ts"
+import {PanelType} from "@/ui/workspace/PanelType.ts"
+import {Workspace} from "./Workspace.ts"
+import {IconSymbol} from "@opendaw/studio-enums"
+
+const BrowserPanel = PanelState.create({
+    type: "panel",
+    name: "Sounds & Effects",
+    icon: IconSymbol.Panel,
+    panelType: PanelType.BrowserPanel,
+    minimized: true,
+    constrains: {type: "flex", minSize: 300, maxSize: 300, flex: 0}
+})
+const devicePanelConfig = {
+    type: "panel",
+    name: "Instruments & Inserts",
+    icon: IconSymbol.Flask,
+    panelType: PanelType.DevicePanel,
+    minimized: true,
+    notPopoutable: true,
+    constrains: {type: "fixed", fixedSize: 248}
+} as const
+const DevicesPanel = PanelState.create(devicePanelConfig)
+const NotepadPanel = PanelState.create({
+    type: "panel",
+    name: "Notepad",
+    icon: IconSymbol.NotePad,
+    panelType: PanelType.Notepad,
+    notMinimizable: true,
+    constrains: {type: "fixed", fixedSize: 480}
+})
+const ProjectInfoPanel = PanelState.create({
+    type: "panel",
+    name: "Project Info",
+    icon: IconSymbol.Box,
+    panelType: PanelType.ProjectInfo,
+    notMinimizable: true,
+    constrains: {type: "flex", minSize: 384, flex: 1}
+})
+const AnalysisPanel: PanelState = PanelState.create({
+    type: "panel",
+    name: "Analysis",
+    icon: IconSymbol.Charts,
+    panelType: PanelType.Analysis,
+    constrains: {type: "flex", minSize: 448, maxSize: 448, flex: 1.0}
+})
+
+/*const ModularSystem = PanelState.create({
+    type: "panel",
+    name: "Modular System",
+    icon: IconSymbol.Box,
+    panelType: PanelType.ModularSystem,
+    notMinimizable: true,
+    constrains: {type: "flex", minSize: 20, flex: 1}
+})*/
+export const DefaultWorkspace = Object.freeze({
+    "dashboard": {
+        name: "Dashboard",
+        icon: IconSymbol.OpenDAW,
+        hidden: true,
+        content: PanelState.create({
+            type: "panel",
+            name: "Dashboard",
+            icon: IconSymbol.OpenDAW,
+            panelType: PanelType.Dashboard,
+            notPopoutable: true,
+            notMinimizable: true,
+            constrains: {type: "flex", minSize: 0, flex: 1}
+        })
+    },
+    "default": {
+        name: "Default",
+        icon: IconSymbol.Timeline,
+        content: {
+            type: "layout",
+            orientation: "horizontal",
+            contents: [
+                BrowserPanel,
+                {
+                    type: "layout",
+                    orientation: "vertical",
+                    contents: [
+                        PanelState.create({
+                            type: "panel",
+                            name: "Timeline",
+                            icon: IconSymbol.Timeline,
+                            panelType: PanelType.Timeline,
+                            constrains: {type: "flex", minSize: 200, flex: 2}
+                        }),
+                        PanelState.create({
+                            type: "panel",
+                            name: "Editor",
+                            icon: IconSymbol.Pencil,
+                            panelType: PanelType.ContentEditor,
+                            constrains: {type: "flex", minSize: 170, flex: 1},
+                            minimized: true
+                        }),
+                        PanelState.create({...devicePanelConfig, constrains: {type: "flex", minSize: 84, flex: 1}}),
+                        PanelState.create({
+                            type: "panel",
+                            name: "Mixer",
+                            icon: IconSymbol.Mixing,
+                            panelType: PanelType.CompactMixer,
+                            minimized: true,
+                            constrains: {type: "flex", minSize: 120, flex: 0.42}
+                        })
+                    ],
+                    constrains: {type: "flex", minSize: 0, flex: 1}
+                }
+            ],
+            constrains: {type: "flex", minSize: 0, flex: 1}
+        }
+    },
+    "mixer": {
+        name: "Mixer",
+        icon: IconSymbol.Mixing,
+        content: {
+            type: "layout",
+            orientation: "horizontal",
+            contents: [
+                BrowserPanel,
+                {
+                    type: "layout",
+                    orientation: "vertical",
+                    contents: [
+                        PanelState.create({
+                            type: "panel",
+                            name: "Mixer",
+                            icon: IconSymbol.Mixing,
+                            panelType: PanelType.Mixer,
+                            notMinimizable: true,
+                            constrains: {type: "flex", minSize: 0, flex: 1}
+                        }),
+                        DevicesPanel
+                    ],
+                    constrains: {type: "flex", minSize: 0, flex: 1}
+                },
+                AnalysisPanel
+            ],
+            constrains: {type: "flex", minSize: 20, flex: 1}
+        }
+    },
+    /*"modular": {
+        name: "Modular",
+        icon: IconSymbol.Box,
+        hidden: true,
+        content: {
+            type: "layout",
+            orientation: "horizontal",
+            contents: [
+                BrowserPanel,
+                {
+                    type: "layout",
+                    orientation: "vertical",
+                    contents: [
+                        ModularSystem,
+                        DevicesPanel
+                    ],
+                    constrains: {type: "flex", minSize: 0, flex: 1}
+                }
+            ],
+            constrains: {type: "flex", minSize: 20, flex: 1}
+        }
+    },*/
+    "modulation": {
+        name: "Modulation",
+        icon: IconSymbol.Modulation,
+        content: {
+            type: "layout",
+            orientation: "horizontal",
+            contents: [
+                BrowserPanel,
+                {
+                    type: "layout",
+                    orientation: "vertical",
+                    contents: [
+                        PanelState.create({
+                            type: "panel",
+                            name: "Modulation",
+                            icon: IconSymbol.Modulation,
+                            panelType: PanelType.Modulation,
+                            notMinimizable: true,
+                            constrains: {type: "flex", minSize: 0, flex: 1}
+                        }),
+                        DevicesPanel
+                    ],
+                    constrains: {type: "flex", minSize: 0, flex: 1}
+                }
+            ],
+            constrains: {type: "flex", minSize: 20, flex: 1}
+        }
+    },
+    "piano": {
+        name: "Piano Tutorial Mode",
+        icon: IconSymbol.Piano,
+        content: PanelState.create({
+            type: "panel",
+            name: "Piano Tutorial Mode",
+            icon: IconSymbol.Piano,
+            panelType: PanelType.MidiFall,
+            constrains: {type: "flex", minSize: 0, flex: 1}
+        })
+    },
+    "project": {
+        name: "Project Info",
+        icon: IconSymbol.NotePad,
+        content: {
+            type: "layout",
+            orientation: "horizontal",
+            contents: [
+                ProjectInfoPanel,
+                NotepadPanel,
+                PanelState.create({
+                    type: "panel",
+                    name: "Empty",
+                    icon: IconSymbol.OpenDAW,
+                    panelType: PanelType.EmptyFlexSpace,
+                    constrains: {type: "flex", minSize: 0, flex: 1}
+                })
+            ],
+            constrains: {type: "flex", minSize: 0, flex: 1}
+        }
+    },
+    "shadertoy": {
+        name: "Shadertoy",
+        icon: IconSymbol.Shadertoy,
+        content: {
+            type: "layout",
+            orientation: "horizontal",
+            contents: [
+                PanelState.create({
+                    type: "panel",
+                    name: "Preview",
+                    icon: IconSymbol.Shadertoy,
+                    panelType: PanelType.ShadertoyPreview,
+                    constrains: {type: "flex", minSize: 320, flex: 1}
+                }),
+                PanelState.create({
+                    type: "panel",
+                    name: "Editor",
+                    icon: IconSymbol.Generator,
+                    panelType: PanelType.ShadertoyEditor,
+                    constrains: {type: "flex", minSize: 0, flex: 1},
+                    notPopoutable: true
+                })
+            ],
+            constrains: {type: "flex", minSize: 0, flex: 1}
+        }
+    },
+    "code": {
+        name: "Code",
+        icon: IconSymbol.Code,
+        hidden: true,
+        content: {
+            type: "layout",
+            orientation: "horizontal",
+            contents: [
+                BrowserPanel,
+                {
+                    type: "layout",
+                    orientation: "vertical",
+                    contents: [
+                        PanelState.create({
+                            type: "panel",
+                            name: "Code Editor",
+                            icon: IconSymbol.Code,
+                            panelType: PanelType.CodeEditor,
+                            notMinimizable: true,
+                            constrains: {type: "flex", minSize: 0, flex: 1}
+                        }),
+                        DevicesPanel
+                    ],
+                    constrains: {type: "flex", minSize: 0, flex: 1}
+                }
+            ],
+            constrains: {type: "flex", minSize: 20, flex: 1}
+        }
+    },
+    "tap": {
+        name: "Match Tempo",
+        icon: IconSymbol.Time,
+        content: PanelState.create({
+            type: "panel",
+            name: "Match Tempo",
+            icon: IconSymbol.Time,
+            panelType: PanelType.TapTempo,
+            notMinimizable: true,
+            notPopoutable: true,
+            constrains: {type: "flex", minSize: 0, flex: 1}
+        })
+    }
+} satisfies Record<string, Workspace.Screen>)
+
+

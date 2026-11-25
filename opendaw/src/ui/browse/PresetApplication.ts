@@ -1,0 +1,56 @@
+import {DefaultObservableValue, isDefined, Option, RuntimeNotifier, UUID} from "@opendaw/lib-std"
+import {InstrumentFactories, PresetDecoder} from "@opendaw/studio-adapters"
+import {PresetSource, PresetStorage, Project} from "@opendaw/studio-core"
+import {OpenPresetAPI} from "@/opendaw-api"
+
+export namespace PresetApplication {
+    export const loadBytes = (uuid: UUID.String, source: PresetSource): Promise<ArrayBuffer> => {
+        if (source === "user") {return PresetStorage.load(UUID.parse(uuid))}
+        const progress = new DefaultObservableValue(0.0)
+        const controller = new AbortController()
+        const dialog = RuntimeNotifier.progress({
+            headline: "Downloading Preset",
+            progress,
+            cancel: () => controller.abort()
+        })
+        return OpenPresetAPI.get().load(UUID.parse(uuid), value => progress.setValue(value), controller.signal)
+            .finally(() => dialog.terminate())
+    }
+
+    export const createNewAudioUnitFromRack = async (project: Project,
+                                                     uuid: UUID.String,
+                                                     source: PresetSource,
+                                                     anchor: Option<UUID.Bytes> = Option.None): Promise<void> => {
+        const bytes = await loadBytes(uuid, source)
+        project.editing.modify(() => {
+            const insertIndex = anchor.flatMap(unit => project.api.audioUnitIndex(unit)).unwrapOrUndefined()
+            const imported = PresetDecoder.decode(bytes, project.skeleton, insertIndex)
+            const first = imported.at(0)
+            if (isDefined(first)) {
+                project.userEditingManager.audioUnit.edit(first.editing)
+            }
+        })
+        project.loadScriptDevices()
+    }
+
+    export const createNewAudioUnitFromInstrument = async (project: Project,
+                                                           uuid: UUID.String,
+                                                           deviceKey: InstrumentFactories.Keys,
+                                                           source: PresetSource,
+                                                           anchor: Option<UUID.Bytes> = Option.None): Promise<void> => {
+        const bytes = await loadBytes(uuid, source)
+        const factory = InstrumentFactories.Named[deviceKey]
+        project.editing.modify(() => {
+            const product = project.api.createAnyInstrument(factory)
+            project.api.placeAudioUnitBefore(product.audioUnitBox, anchor)
+            const attempt = PresetDecoder.replaceAudioUnit(
+                bytes, product.audioUnitBox,
+                {keepMIDIEffects: true, keepAudioEffects: true})
+            if (attempt.isFailure()) {
+                RuntimeNotifier.notify({message: "Cannot apply preset.", icon: "Warning"})
+            }
+        })
+        project.loadScriptDevices()
+    }
+}
+

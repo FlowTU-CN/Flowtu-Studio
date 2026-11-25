@@ -1,0 +1,16 @@
+.ft-clip-gain-layer {
+    position: absolute; grid-row: 1 / -1; grid-column: -2 / -1; inset: 0;
+    overflow: hidden; z-index: 5; pointer-events: none;
+}
+.ft-clip-gain {
+    position: absolute; display: flex; align-items: center; justify-content: center; gap: 4px;
+    height: 15px; min-width: 0; padding: 0 2px; overflow: hidden; pointer-events: auto; touch-action: none;
+    border: 1px solid transparent; border-radius: 3px; background: #101b25a6; color: #aebfcc;
+    cursor: ns-resize; font: 9px/15px ui-monospace, monospace; white-space: nowrap;
+}
+.ft-clip-gain i { position: relative; width: 7px; height: 12px; flex: none; background: linear-gradient(90deg,transparent 3px,#7f93a5 3px 4px,transparent 4px); }
+.ft-clip-gain i::after { content: ""; position: absolute; top: var(--gain-y); left: 0; width: 7px; height: 3px; background: #c1d5e3; border-radius: 1px; transform: translateY(-50%); }
+.ft-clip-gain.compact span { display: none; }
+.ft-clip-gain:is(:hover, :focus-visible, .dragging) { background: #203b50; border-color: #aad3ef; outline: 0; }
+.ft-clip-gain.compact:is(:hover, :focus-visible, .dragging) { overflow: visible; }
+.ft-clip-gain.compact:is(:hover, :focus-visible, .dragging) span { display: block; position: absolute; bottom: 100%; color: #ecf6fd; background: #172c3c; border-radius: 3px; padding: 0 4px; }

@@ -1,0 +1,19 @@
+.ft-floating-composer .ft-lite-dock-glass:has(.ft-creative-add) {
+    grid-template-rows:auto minmax(0,1fr) auto;
+    gap:3px 12px;
+    padding-block:6px 8px;
+}
+.ft-floating-composer .ft-lite-dock-glass .ft-dock-field {grid-area:2 / 1 / 3 / -1}
+.ft-floating-composer .ft-lite-dock-glass .ft-dock-send {grid-area:3 / 2;width:28px;height:28px}
+.ft-creative-add {grid-area:3 / 1;justify-self:start;align-self:end}
+.ft-floating-composer .ft-creative-add > button {
+    width:28px;height:28px;min-height:0;min-width:0;padding:0;
+    border:1px solid #e1ebef59;border-radius:50%;background:#13202a45;color:#e6ecf1;cursor:pointer;
+}
+.ft-floating-composer .ft-creative-add > button:is([aria-expanded=true],:hover) {background:#dde9ef26;border-color:#d0dce3a3}
+.ft-creative-add svg {width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
+.ft-creative-tools.flowtu-menu-panel {width:max-content;min-width:172px;padding:10px 12px;gap:6px;background:#20272e;border-color:#5b6872}
+.ft-creative-tools h3 {margin:0;color:#b7c1cb;font:500 11px/1.5 system-ui}
+.ft-creative-tools ul {display:grid;gap:0;list-style:none;margin:0;padding:0}
+.ft-creative-tools li {display:flex;align-items:center;gap:10px;min-height:30px;margin:0;color:#e2e7ed;font:13px/1.4 system-ui}
+.ft-creative-tools li svg {color:#b0bdca}

@@ -1,0 +1,34 @@
+diff --git a/dist/Fading.js b/dist/Fading.js
+--- a/dist/Fading.js
++++ b/dist/Fading.js
+@@ -1,2 +1,2 @@
+-import { ObjectField, NoPointers, Float32Field, } from "@opendaw/lib-box";
++import { ObjectField, NoPointers, BooleanField, Float32Field, } from "@opendaw/lib-box";
+ export class Fading extends ObjectField {
+@@ -20,2 +20,4 @@
+     }
++    get inEqualPower() { return this.getField(5); }
++    get outEqualPower() { return this.getField(6); }
+     initializeFields() {
+@@ -50,2 +52,4 @@
+             }, "unipolar", "ratio", 0.25),
++            5: BooleanField.create({parent: this, fieldKey: 5, fieldName: "in-equal-power", deprecated: false, pointerRules: NoPointers}, false),
++            6: BooleanField.create({parent: this, fieldKey: 6, fieldName: "out-equal-power", deprecated: false, pointerRules: NoPointers}, false),
+         };
+diff --git a/dist/Fading.d.ts b/dist/Fading.d.ts
+--- a/dist/Fading.d.ts
++++ b/dist/Fading.d.ts
+@@ -1,2 +1,2 @@
+-import { ObjectField, FieldConstruct, Float32Field, UnreferenceableType } from "@opendaw/lib-box";
++import { ObjectField, FieldConstruct, BooleanField, Float32Field, UnreferenceableType } from "@opendaw/lib-box";
+ export type FadingFields = {
+@@ -6,2 +6,4 @@
+     4: Float32Field;
++    5: BooleanField;
++    6: BooleanField;
+ };
+@@ -14,2 +16,4 @@
+     get outSlope(): Float32Field;
++    get inEqualPower(): BooleanField;
++    get outEqualPower(): BooleanField;
+     initializeFields(): FadingFields;

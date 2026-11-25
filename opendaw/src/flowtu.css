@@ -1,0 +1,56 @@
+:root {
+  --flowtu-blue:#5aaff8; --flowtu-orange:#ff9b47; --flowtu-text:#e8edf4;
+  --flowtu-border:rgba(174,199,225,.18); --flowtu-glass:rgba(24,36,48,.76);
+  --color-background:#07090d !important;
+  --color-header-background:#090c11 !important; --color-footer-background:#090e15 !important;
+  --color-panel-background:#101923 !important; --color-panel-background-dark:#0c131d !important;
+  --color-panel-background-bright:#1a2532 !important; --color-black:#334154 !important;
+}
+.flowtu-bar.flowtu-bar{font-size:14px;gap:7px}.flowtu-status.flowtu-status{font-size:13px;color:#c5d3e2;line-height:1.4}.flowtu-bar.flowtu-bar a{font-size:13px;color:#c3d6eb}.flowtu-bar button{min-height:36px}.flowtu-help.flowtu-help{max-height:85vh;overflow:auto;font-size:15px;line-height:1.6}.flowtu-video.flowtu-video{resize:none}.flowtu-video.flowtu-video p{font-size:13px;color:#c4d3e3}.flowtu-video.flowtu-video output{font-size:14px}
+html,body{background:#07090d;background-image:radial-gradient(ellipse at 55% 90%,#174f78 0,transparent 68%)}
+.flowtu-timeline{background:radial-gradient(ellipse at 60% 100%,#164c73 0,#0c2337 42%,#080d14 84%)}
+.flowtu-bar{display:flex;align-items:center;gap:6px;padding:9px 14px;margin:8px 10px 4px;min-height:58px;flex:0 0 auto;flex-wrap:wrap;background:linear-gradient(115deg,rgba(39,40,44,.95),rgba(21,27,35,.93));color:var(--flowtu-text);font:13px/1.3 system-ui;z-index:2;border:1px solid var(--flowtu-border);border-radius:24px;box-shadow:0 8px 24px #0003}
+@font-face {
+  font-family: "Archivo Studio";
+  src: url("/fonts/archivo-studio-regular.ttf") format("truetype");
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+.flowtu-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  padding: 0 8px 0 3px;
+  white-space: nowrap;
+}
+.flowtu-brand img { display: block; width: 112px; height: auto; }
+.flowtu-brand span {
+  font: 400 30px/1 "Archivo Studio", system-ui, sans-serif;
+  letter-spacing: .024em;
+  color: #dfe4e9;
+}
+@supports (background-clip: text) {
+  .flowtu-brand span {
+    background: linear-gradient(176deg, #aaaeb6 0%, #edf0f4 23%, #fff 41%, #b3bbc5 48%, #939da9 52%, #ccd3dc 75%, #f5f6f7 96%);
+    background-clip: text;
+    color: transparent;
+    filter: drop-shadow(0 1px .5px #0a101a);
+  }
+}
+@media (max-width: 520px) {
+  .flowtu-brand { gap: 6px; }
+  .flowtu-brand img { width: 87px; }
+  .flowtu-brand span { font-size: 23.3px; }
+}
+@media (forced-colors: active) {
+  .flowtu-brand span { background: none; color: CanvasText; filter: none; }
+}
+.flowtu-bar button,.flowtu-bar select,.flowtu-video button,.flowtu-help button{border:1px solid var(--flowtu-border);background:rgba(38,49,63,.7);border-radius:20px;padding:8px 10px;color:#e3eaf3;font:inherit;cursor:pointer;white-space:nowrap;transition:background .15s,border-color .15s}
+.flowtu-bar button:hover,.flowtu-video button:hover{background:#263c54;border-color:#5aaff880}.flowtu-bar button[data-action=save]{background:#2479c7;color:#fff;border-color:#589bd6}.flowtu-bar button[data-action=save]:hover{background:#348bda}.flowtu-bar button[data-action=wav]{color:#ffb472;border-color:#a66b3b;background:#382a2070}.flowtu-bar button[data-action=wav]:hover{background:#543720}.flowtu-bar button[aria-expanded=true]{border-color:var(--flowtu-blue);color:#b9ddff;background:#1d3d5e}.flowtu-bar[aria-busy=true] button{opacity:.55;pointer-events:none}.flowtu-divider{width:1px;height:23px;background:#3b4655;margin:0 3px}.flowtu-status{font-size:12px;color:#aebacb;flex:1;min-width:110px;max-width:240px;white-space:normal}.flowtu-bar a{font-size:12px;color:#aab9cf;white-space:nowrap}.flowtu-bar [data-action=help]{background:transparent}
+.flowtu-bar button:focus-visible,.flowtu-bar select:focus-visible,.flowtu-help button:focus-visible{outline:2px solid var(--flowtu-blue);outline-offset:3px}
+.flowtu-video{position:fixed;right:24px;top:145px;width:320px;min-width:220px;max-width:65vw;background:#101b27;color:#d9e5f2;border:1px solid #4b6e8d;box-shadow:0 15px 40px #0008;z-index:12;border-radius:16px;overflow:hidden;resize:horizontal;font:13px system-ui}.flowtu-video[hidden]{display:none}.flowtu-video header{display:flex;align-items:center;justify-content:space-between;padding:9px 12px;letter-spacing:1px;background:#1b2a3b}.flowtu-video video{width:100%;aspect-ratio:16/9;background:#080a0d;display:block;object-fit:contain}.flowtu-video-meta,.flowtu-video-tools{display:flex;justify-content:space-between;gap:10px;padding:9px 12px;align-items:center}.video-name{overflow:hidden;white-space:nowrap;text-overflow:ellipsis}.flowtu-video output{font:13px monospace;color:#91caff}.flowtu-video input{width:55px;background:#152638;border:1px solid #536b86;color:#fff;border-radius:5px;padding:3px}.flowtu-video p{color:#a5b5c8;margin:2px 12px 12px;font-size:12px}.flowtu-video button{padding:3px 8px}
+.flowtu-help{background:linear-gradient(145deg,#1e2b3b,#111923);color:#dbe5f2;padding:30px;border:1px solid #4f657e;border-radius:22px;width:640px;max-width:90vw;font:14px/1.8 system-ui;z-index:100;box-shadow:0 25px 80px #0009}.flowtu-help h2{font-size:24px;font-weight:600;color:#fff}.flowtu-help li{margin:12px 0}.flowtu-help::backdrop{background:#02060cc9;backdrop-filter:blur(5px)}.flowtu-help button{display:block;margin-left:auto;background:#2479c7;color:white;padding:8px 24px}
+.flowtu-bar .flowtu-home {display:inline-flex;align-items:center;gap:4px;padding:6px 8px 6px 3px;border-right:1px solid var(--flowtu-border);text-decoration:none}
+.flowtu-home::before {content:"←"}
+.flowtu-bar .flowtu-home:hover,.flowtu-bar .flowtu-home:focus-visible {color:white}

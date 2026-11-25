@@ -1,0 +1,62 @@
+:root { --ft-rack-bg:#0d1721; --ft-rack-surface:#172735; --ft-rack-line:#385065; --ft-rack-accent:#75b9ed }
+:root[data-studio-skin="modular"] {
+    --ft-rack-bg:#222224; --ft-rack-surface:#333337; --ft-rack-line:#505057; --ft-rack-accent:#ffac56;
+    --ft-rack-note:#fc698c; --ft-rack-midi:#c68cff; --ft-rack-fx:#71c7fa
+}
+:root[data-studio-skin="phosphor"] {
+    --ft-rack-bg:#101c18; --ft-rack-surface:#1b3027; --ft-rack-line:#38594c; --ft-rack-accent:#b6f298;
+    --ft-rack-note:#d3e390; --ft-rack-midi:#abdac4; --ft-rack-fx:#6bd8ad
+}
+:root[data-studio-skin="ultraviolet"] {
+    --ft-rack-bg:#191622; --ft-rack-surface:#2a2236; --ft-rack-line:#51425f; --ft-rack-accent:#eab0f3;
+    --ft-rack-note:#e9a8ce; --ft-rack-midi:#b6a3ef; --ft-rack-fx:#87d3f2
+}
+:root[data-studio-skin]:not([data-studio-skin="studio"]) :is([data-ft-device],[data-panel-type="DevicePanel"],.ft-fx-routing) {
+    --color-panel-background:var(--ft-rack-bg);
+    --color-panel-background-bright:var(--ft-rack-surface);
+    --color-panel-background-dark:var(--ft-rack-bg);
+    --color-blue:var(--ft-rack-fx);
+    --color-green:var(--ft-rack-note);
+    --color-orange:var(--ft-rack-accent);
+}
+:root[data-studio-skin]:not([data-studio-skin="studio"]) [data-ft-device] {
+    background:linear-gradient(150deg,var(--ft-rack-surface),var(--ft-rack-bg) 68%);
+    box-shadow:inset 0 0 0 1px var(--ft-rack-line);
+    --strip:var(--ft-rack-fx);
+}
+:root [data-ft-device="instrument"] {--strip:var(--ft-rack-note)!important}
+:root [data-ft-device="midi-effect"] {--strip:var(--ft-rack-midi)!important}
+:root[data-studio-skin]:not([data-studio-skin="studio"]) [data-ft-device] > header {
+    color:var(--strip); border-top:2px solid var(--strip);
+    background:var(--ft-rack-surface); font-family:ui-monospace,monospace;
+}
+.ft-studio-settings {position:fixed;inset:0;margin:auto;width:min(360px,90vw);max-height:87vh;overflow:auto;padding:0;
+    background:var(--ft-rack-bg);color:#ecedf1;border:1px solid var(--ft-rack-line);border-radius:10px;
+    box-shadow:0 15px 65px #0009;font:13px/1.4 system-ui}
+.ft-studio-settings::backdrop {background:#03070ba8}
+.ft-studio-settings form {display:grid;gap:16px;padding:20px}
+.ft-studio-settings h2 {font-size:17px;margin:0}
+.ft-studio-settings label,.ft-studio-settings footer {display:flex;align-items:center;justify-content:space-between;gap:12px}
+.ft-studio-settings select,.ft-studio-settings button {color:inherit;background:var(--ft-rack-surface);font:inherit;
+    padding:4px 7px;border:1px solid var(--ft-rack-line);border-radius:5px}
+.ft-binding-list {display:grid;grid-template-columns:1fr auto;align-items:center;gap:4px 10px;border-block:1px solid var(--ft-rack-line);padding:10px 0;color:#c6d0d9}
+.ft-binding-list kbd {justify-self:end;color:var(--ft-rack-accent);font:12px/1.6 ui-monospace,monospace}
+.ft-studio-settings footer {justify-content:flex-end}
+
+.ft-palette {display:inline-flex;align-items:center;gap:6px;color:#c7d4e0;font:12px system-ui}
+.ft-palette[hidden] {display:none}
+.ft-palette select {background:var(--ft-rack-bg);color:#edf1f4;border:1px solid var(--ft-rack-line);border-radius:5px;padding:3px 5px;font:inherit}
+.flowtu-panel-cards .ft-palette {margin-left:auto}
+:root[data-studio-skin] [data-ft-device] > header {color:var(--ft-device-accent)!important;border-top:2px solid var(--ft-device-accent);background:color-mix(in srgb,var(--ft-device-accent) 9%,var(--ft-rack-bg))}
+:root[data-studio-skin] [data-ft-device]:not(.minimized) > header {grid-template-columns:auto auto minmax(2.5em,1fr) auto auto auto}
+:root[data-studio-skin] [data-ft-device] {--color-blue:var(--ft-device-accent);--color-green:var(--ft-device-accent)}
+:root[data-studio-skin] [data-ft-device][data-ft-selected] {background:#0a1018;box-shadow:inset 0 0 0 1.5px var(--ft-device-accent)}
+:root[data-studio-skin] [data-ft-device][data-ft-selected] > header {background:#060b10;box-shadow:inset 3px 0 var(--ft-device-accent);color:#f4f7fa!important}
+.ft-color-swatch,.ft-patch input.ft-color-swatch {appearance:none;box-sizing:border-box;width:16px;height:16px;padding:1px;border:1px solid #a4afba7a;border-radius:50%;background:transparent;cursor:pointer;overflow:hidden}
+.ft-color-swatch::-webkit-color-swatch-wrapper {padding:1px}
+.ft-color-swatch::-moz-color-swatch {border:0;border-radius:50%}
+[data-ft-device].minimized > header > .ft-color-swatch {display:none}
+
+[data-ft-device] [data-ft-knob] > g > path:nth-last-child(2) {stroke:var(--ft-device-accent)}
+[data-ft-device] .ft-device-popout {color:var(--ft-device-accent)}
+.ft-color-swatch::-webkit-color-swatch {border:0;border-radius:50%}

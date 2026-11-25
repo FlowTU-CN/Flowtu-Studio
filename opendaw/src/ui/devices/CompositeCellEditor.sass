@@ -1,0 +1,119 @@
+component
+  display: flex
+  flex-direction: column
+  flex: 0 0 auto
+  box-sizing: border-box
+  width: 7rem
+  height: 100%
+  outline: none
+  border-radius: 0 0 3px 3px
+  background-color: rgba(white, 0.03)
+  // Drawn over its container's own 1px top line, so the head reads cream in both placements.
+  margin-top: -1px
+  border-top: 1px var(--color-cream) solid
+
+  &.instrument
+    .header, .entry-number.current, .back-button:hover
+      color: var(--color-cream)
+
+  .navigation
+    flex: 1
+    display: flex
+    flex-direction: column
+    align-items: center
+    justify-content: center
+    row-gap: 0.5rem
+
+    .back-button
+      display: grid
+      place-items: center
+      font-size: 0.75em
+      width: 20px
+      height: 20px
+      border-radius: 10px
+      cursor: pointer
+      color: var(--color-shadow)
+      background-color: rgba(white, 0.08)
+
+      &:hover
+        color: rgba(black, 0.8)
+        background-color: var(--color-blue)
+
+      > svg
+        transform: translateY(-1px)
+
+  .entry-numbers
+    display: flex
+    flex-wrap: wrap
+    justify-content: center
+    box-sizing: border-box
+    width: 100%
+    gap: 2px
+    padding: 0 0.5rem
+
+    .entry-number
+      flex: 0 0 20px
+      display: grid
+      font-size: 0.625em
+      width: 20px
+      height: 20px
+      place-items: center
+      border-radius: 10px
+      color: var(--color-shadow)
+      background-color: rgba(black, 0.2)
+      cursor: pointer
+      box-shadow: 0 0.5px 0.5px 0 rgba(white, 0.08), 0 -0.5px 0.5px 0 rgba(black, 0.08)
+
+      &.current
+        color: black
+        background-color: var(--color-blue)
+
+  .header
+    margin: 0
+    height: 2rem
+    display: flex
+    align-items: center
+    padding: 0 0.25rem 0 0.5rem
+    font-size: inherit
+    color: var(--color-blue)
+    outline: none
+
+    &.selected
+      border-radius: 0 0 3px 3px
+      background-color: rgba(white, 0.03)
+
+    > h1
+      white-space: nowrap
+      overflow: hidden
+      text-overflow: ellipsis
+      font-size: 11px
+      letter-spacing: 0.03em
+      min-height: 2rem
+      line-height: 2rem
+      margin: 0
+
+  .controls
+    margin-top: 1em
+    display: flex
+    align-self: center
+    align-items: center
+    justify-content: center
+    column-gap: 0.3em
+    padding: 0.375em 0.5rem
+    border-radius: 0.5em
+    background-color: rgba(black, 0.12)
+    width: fit-content
+    box-shadow: 0 0.5px 0.5px 0 rgba(white, 0.04)
+
+    .channel-mix
+      display: flex
+      flex-direction: row
+      font-size: 0.625em
+      column-gap: 0.375em
+
+    .channel-isolation
+      display: flex
+      flex-direction: row
+      font-size: 0.5em
+      column-gap: 0.5em
+

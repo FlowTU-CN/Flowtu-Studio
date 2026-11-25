@@ -1,0 +1,53 @@
+.ft-track-folder {
+    display: flex; grid-column: 1 / -1; align-items: center; gap: 5px; padding: 0 9px;
+    min-height: 30px; background: rgb(24 38 50 / 72%); border-left: 4px solid var(--folder-color);
+    box-shadow: inset 0 -1px #2b3948; font: 12px system-ui; color: #d6e4ef; z-index: 1;
+}
+.ft-track-folder button { color: inherit; background: transparent; border: 0; cursor: pointer; padding: 4px 6px; font: inherit; }
+.ft-track-folder button:focus-visible { outline: 1px solid #86bce5; }
+.ft-track-folder button:first-child { display: flex; align-items: center; gap: 7px; max-width: 72%; }
+.ft-track-folder button:first-child span { white-space: nowrap; text-overflow: ellipsis; overflow: hidden; }
+.ft-track-folder button:first-child::before { content: "▾"; color: var(--folder-color); }
+.ft-track-folder button[aria-expanded=false]::before { content: "▸"; }
+.ft-track-folder small { color: #a4b6c4; }
+.ft-track-folder.accept-drop { background: #2a4256; }
+[data-flowtu-unit][data-folder-hidden] { display: none !important; }
+[data-flowtu-unit][data-colored]::before { border-left-color: var(--ft-track-color) !important; }
+
+.ft-track-folder-editor {
+    background: #14212c; border: 1px solid #415669; color: #e3edf5; border-radius: 12px;
+    padding: 18px; width: min(360px,85vw); max-height: 80vh; overflow: auto; font: 14px/1.4 system-ui;
+}
+.ft-track-folder-editor::backdrop { background: #02081088; }
+.ft-track-folder-editor h3 { font-size: 16px; margin: 0 0 10px; }
+.ft-track-folder-editor form { display: grid; gap: 10px; }
+.ft-track-folder-editor label { display: flex; align-items: center; gap: 9px; }
+.ft-track-folder-editor input[type=text] { flex: 1; min-width: 0; background: #0c1720; color: inherit; border: 1px solid #405569; padding: 5px; border-radius: 4px; }
+.ft-track-folder-editor input[type=color] { border: 0; width: 42px; padding: 0; }
+.ft-track-folder-editor fieldset { min-width: 0; border: 1px solid #344959; border-radius: 6px; max-height: 30vh; overflow-y: auto; margin: 0; }
+.ft-track-folder-editor fieldset label { padding-block: 3px; }
+.ft-track-folder-editor footer { display: flex; justify-content: flex-end; gap: 8px; }
+.ft-track-folder-editor button { color: inherit; border: 1px solid #445a6d; background: #223547; padding: 5px 12px; border-radius: 5px; cursor: pointer; }
+.ft-track-folder-editor button[data-remove] { margin-right: auto; }
+.ft-track-folder-editor button[type=submit] { background: #295578; }
+.ft-track-folder[hidden] { display: none; }
+.ft-track-folder { padding-left: calc(7px + min(var(--ft-depth, 0), 5) * 9px); }
+.ft-track-folder .ft-folder-switch { border: 1px solid #41525f; border-radius: 4px; padding: 1px 4px; min-width: 20px; font: 11px/15px system-ui; }
+.ft-folder-switch[aria-pressed=true] { background: #c8884d; border-color: #e2a368; color: #101922; }
+.ft-folder-switch[data-switch=solo][aria-pressed=true] { background: #87b6da; border-color: #99ccef; }
+.ft-track-folder [draggable=true] { cursor: grab; }
+[data-folder-drop=inside] { background: #324858; }
+[data-folder-drop=before] { box-shadow: inset 0 2px #80b6da; }
+[data-folder-drop=after] { box-shadow: inset 0 -2px #80b6da; }
+[data-flowtu-unit][data-folder-drop=before]::before { border-top: 2px solid #80b6da; }
+[data-flowtu-unit][data-folder-drop=after]::before { border-bottom: 2px solid #80b6da; }
+.ft-track-folder-editor select { min-width: 0; flex: 1; color-scheme: dark; }
+
+.ft-track-color.flowtu-toolbar-menu { position: absolute; z-index: 2; left: 0; top: 3px; bottom: 3px; width: 10px; }
+.ft-track-color .flowtu-menu-trigger { width: 100%; height: 100%; padding: 0; border: 0; border-radius: 2px; background: transparent; cursor: pointer; }
+.ft-track-color .flowtu-menu-trigger::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; border-radius: 2px; background: var(--ft-track-color, var(--color)); }
+.ft-track-color .flowtu-menu-trigger:hover::before, .ft-track-color .flowtu-menu-trigger:focus-visible::before { width: 7px; }
+.ft-track-color .flowtu-menu-label, .ft-track-color .flowtu-menu-chevron { display: none; }
+.ft-track-color .flowtu-menu-panel { min-width: 155px; }
+.ft-track-color .flowtu-menu-panel button[data-color]:not([data-color=""])::before { content: ""; width: 12px; height: 12px; border-radius: 3px; background: var(--swatch); }
+[data-flowtu-unit][data-colored] .icon-container > svg:not(.lock-icon, .automation-icon) { color: var(--ft-track-color) !important; }

@@ -1,0 +1,383 @@
+import css from "./ValueEditor.sass?inline"
+import {
+    clampUnit,
+    EmptyExec,
+    Func,
+    isDefined,
+    Lifecycle,
+    MutableObservableOption,
+    Nullable,
+    Option,
+    Point,
+    Selection,
+    unitValue,
+    ValueAxis,
+    ValueMapping
+} from "@opendaw/lib-std"
+import {StudioService} from "@/service/StudioService.ts"
+import {ValueEventBoxAdapter} from "@opendaw/studio-adapters"
+import {ValueEventBox} from "@opendaw/studio-boxes"
+import {RangePadding, SlopeStringMapping} from "@/ui/timeline/editors/value/Constants.ts"
+import {ObservableModifyContext} from "@/ui/timeline/ObservableModifyContext.ts"
+import {ValueModifier} from "@/ui/timeline/editors/value/ValueModifier.ts"
+import {createValuePainter} from "@/ui/timeline/editors/value/ValuePainter.ts"
+import {Interpolation, ppqn} from "@opendaw/lib-dsp"
+import {createValueEventCapturing, ValueCaptureTarget} from "@/ui/timeline/editors/value/ValueEventCapturing.ts"
+import {createValueSelectionLocator} from "@/ui/timeline/editors/value/ValueSelectionLocator.ts"
+import {ValuePaintModifier} from "@/ui/timeline/editors/value/ValuePaintModifier.ts"
+import {SelectionRectangle} from "@/ui/timeline/SelectionRectangle.tsx"
+import {SnapValueThresholdInPixels, ValueMoveModifier} from "@/ui/timeline/editors/value/ValueMoveModifier.ts"
+import {ValueSlopeModifier} from "@/ui/timeline/editors/value/ValueSlopeModifier.ts"
+import {installCursor} from "@/ui/hooks/cursor.ts"
+import {Cursor} from "@/ui/Cursors.ts"
+import {installValueContextMenu} from "@/ui/timeline/editors/value/ValueContextMenu.ts"
+import {createElement} from "@opendaw/lib-jsx"
+import {Snapping} from "@/ui/timeline/Snapping.ts"
+import {installValueInput} from "@/ui/timeline/editors/ValueInput.ts"
+import {ValueEventOwnerReader} from "@/ui/timeline/editors/EventOwnerReader.ts"
+import {installEditorBody} from "../EditorBody"
+import {ValueContentDurationModifier} from "./ValueContentDurationModifier"
+import {Dragging, Events, Html, ShortcutManager} from "@opendaw/lib-dom"
+import {ValueTooltip} from "./ValueTooltip"
+import {ValueEventEditing} from "./ValueEventEditing"
+import {createValueMenu} from "./ValueMenu"
+import {CanvasPainter, ClipboardManager, MenuItem, MenuRootData, TimelineRange, ValuesClipboard} from "@opendaw/studio-core"
+import {ValueContext} from "@/ui/timeline/editors/value/ValueContext"
+import {ContentEditorShortcuts} from "@/ui/shortcuts/ContentEditorShortcuts"
+import {Surface} from "@/ui/surface/Surface.tsx"
+import {FloatingTextInput} from "@/ui/components/FloatingTextInput.tsx"
+
+const className = Html.adoptStyleSheet(css, "ValueEditor")
+
+type Construct = {
+    lifecycle: Lifecycle
+    service: StudioService
+    range: TimelineRange
+    snapping: Snapping
+    eventMapping: ValueMapping<number>
+    reader: ValueEventOwnerReader
+    context: ValueContext
+    bendSegments?: boolean
+    editMenu?: MenuItem<MenuRootData>
+}
+
+export const ValueEditor = ({lifecycle, service, range, snapping, eventMapping, reader, context, editMenu, bendSegments = false}: Construct) => {
+    const {project} = service
+    const {editing, engine, boxGraph, boxAdapters} = project
+    const eventsField = reader.content.box.events
+    const selection: Selection<ValueEventBoxAdapter> = lifecycle.own(project.selection
+        .createFilteredSelection(box => box instanceof ValueEventBox
+            && box.events.targetVertex.contains(eventsField), {
+            fx: (adapter: ValueEventBoxAdapter) => adapter.box,
+            fy: vertex => project.boxAdapters.adapterFor(vertex.box, ValueEventBoxAdapter)
+        }))
+    lifecycle.own(selection.catchupAndSubscribe({
+        onSelected: (adapter: ValueEventBoxAdapter) => adapter.onSelected(),
+        onDeselected: (adapter: ValueEventBoxAdapter) => adapter.onDeselected()
+    }))
+    if (isDefined(editMenu)) {
+        lifecycle.own(editMenu.attach(createValueMenu({editing, selection, events: reader.content.events})))
+    }
+    const canvas: HTMLCanvasElement = <canvas tabIndex={-1} data-value-editor="true"/>
+    const valueAxis: ValueAxis = {
+        axisToValue: (pixel: number): unitValue =>
+            eventMapping.y(1.0 - (pixel - RangePadding - 0.5) / (canvas.clientHeight - RangePadding * 2.0 - 1.0)),
+        valueToAxis: (value: unitValue): number =>
+            (1.0 - eventMapping.x(value)) * (canvas.clientHeight - 2.0 * RangePadding - 1.0) + RangePadding + 0.5
+    }
+    const valueToPixel: Func<unitValue, number> = value => valueAxis.valueToAxis(value) * devicePixelRatio
+    const modifyContext = new ObservableModifyContext<ValueModifier>()
+    const segment = lifecycle.own(new MutableObservableOption<ValueEventBoxAdapter>())
+    const paintValues = createValuePainter({
+        range,
+        valueToPixel,
+        eventMapping,
+        modifyContext,
+        snapping,
+        valueEditing: context,
+        reader,
+        segment
+    })
+    const painter = lifecycle.own(new CanvasPainter(canvas, paintValues))
+    const capturing = createValueEventCapturing(canvas, range, valueAxis.valueToAxis, reader)
+    const selectableLocator = createValueSelectionLocator(reader, range, valueAxis, capturing)
+    //
+    // Register events that must run before any select actions
+    //
+    lifecycle.ownAll(
+        installEditorBody({element: canvas, range, reader}),
+        ValueTooltip.install({
+            element: canvas,
+            capturing,
+            range,
+            valueAxis,
+            reader,
+            eventMapping,
+            context,
+            modifyContext
+        }),
+        Dragging.attach(canvas, (() => {
+            let lastDownTime = 0
+            return (event: PointerEvent) => {
+                const target: Nullable<ValueCaptureTarget> = capturing.captureEvent(event)
+                const altKey = event.altKey
+                const now = Date.now()
+                const dblclck = now - lastDownTime < Events.DOUBLE_DOWN_THRESHOLD
+                lastDownTime = now
+                if ((target?.type === "midpoint" || target?.type === "curve") && !event.shiftKey) {
+                    segment.wrap(target.event)
+                } else {
+                    segment.clear()
+                }
+                if (dblclck && !event.shiftKey) {
+                    if (target === null || target.type === "loop-duration") {
+                        const rect = canvas.getBoundingClientRect()
+                        const position = snapping.xToUnitRound(event.clientX - rect.left) - reader.offset
+                        // #275: when the snapped time already holds a node, the cursor's side of it picks which member
+                        // of the same-time pair the click sets — left of the node = incoming (index 0), right = outgoing.
+                        const side = range.xToUnit(event.clientX - rect.left) - reader.offset < position
+                            ? "incoming" : "outgoing"
+                        const clickValue = valueAxis.axisToValue(event.clientY - rect.top)
+                        const formatValue = context.currentValue
+                        const value: number = Math.abs(valueToPixel(clickValue) - valueToPixel(formatValue))
+                        < SnapValueThresholdInPixels
+                            ? formatValue
+                            : context.quantize(clickValue)
+                        return editing.modify(() => {
+                            reader.prepareInsert?.(position)
+                            return ValueEventEditing.createOrMoveEvent(reader.content, position, value,
+                                context.floating ? Interpolation.Linear : Interpolation.None, side)
+                        }, false)
+                            .match({
+                                none: () => Option.None,
+                                some: adapter => {
+                                    selection.deselectAll()
+                                    selection.select(adapter)
+                                    // #309: anchor the move on the node that was just created, not on the raw
+                                    // cursor. ValueMoveModifier keeps (pointer - reference) as a grab offset, so
+                                    // handing it the unsnapped click would shift every snap boundary by the
+                                    // double-click's snap residual (a 10/90 split instead of 50/50).
+                                    return modifyContext.startModifier(ValueMoveModifier.create({
+                                        editing,
+                                        element: canvas,
+                                        context,
+                                        selection,
+                                        snapping,
+                                        pointerValue: adapter.value,
+                                        pointerPulse: adapter.position + reader.offset,
+                                        valueAxis,
+                                        eventMapping,
+                                        reference: adapter,
+                                        collection: reader.content,
+                                        chainPending: true
+                                    }))
+                                }
+                            })
+                    } else if (target?.type === "event") {
+                        editing.modify(() => ValueEventEditing.deleteEvent(reader.content, target.event))
+                        return Option.wrap({update: EmptyExec}) // Avoid selection
+                    }
+                }
+                if (target === null) {
+                    if (altKey) {
+                        return modifyContext.startModifier(ValuePaintModifier.create({
+                            editing,
+                            element: canvas,
+                            reader,
+                            selection,
+                            snapping,
+                            valueAxis
+                        }))
+                    }
+                } else if (target.type === "midpoint" || target.type === "curve") {
+                    if (event.shiftKey) {
+                        const clientRect = canvas.getBoundingClientRect()
+                        const position: ppqn = range.xToUnit(event.clientX - clientRect.left) - reader.offset
+                        const optCutEvent = editing.modify(() => {
+                            selection.deselectAll()
+                            return reader.content.cut(position, eventMapping).match({
+                                none: () => null,
+                                some: event => {
+                                    selection.select(event)
+                                    return event
+                                }
+                            })
+                        }, false).unwrapOrNull()
+                        if (optCutEvent === null) {return Option.None}
+                        return modifyContext.startModifier(ValueMoveModifier.create({
+                            editing,
+                            element: canvas,
+                            context,
+                            selection,
+                            snapping,
+                            pointerValue: optCutEvent.value,
+                            pointerPulse: position + reader.offset,
+                            valueAxis,
+                            eventMapping,
+                            reference: optCutEvent,
+                            collection: reader.content,
+                            chainPending: true // cut(unmarked) + settle-move sealed as ONE undo step (#208 / #306)
+                        }))
+                    }
+                }
+                return Option.None
+            }
+        })(), {permanentUpdates: false, immediate: true}),
+        Dragging.attach(canvas, event => {
+            const target = capturing.captureEvent(event)
+            if (target?.type !== "loop-duration") {return Option.None}
+            const clientRect = canvas.getBoundingClientRect()
+            return modifyContext.startModifier(ValueContentDurationModifier.create({
+                editing,
+                element: canvas,
+                pointerPulse: range.xToUnit(event.clientX - clientRect.left),
+                snapping,
+                reference: target.reader
+            }))
+        }, {permanentUpdates: true})
+    )
+    const selectionRectangle = (
+        <SelectionRectangle lifecycle={lifecycle}
+                            target={canvas}
+                            selection={selection}
+                            locator={selectableLocator}
+                            xAxis={range.valueAxis}
+                            yAxis={valueAxis}/>
+    )
+    const element: HTMLElement = (
+        <div className={className} tabIndex={-1} onConnect={(self: HTMLElement) => {
+            // Only grab focus when nothing else holds it. A content swap triggered by
+            // selecting a region in the timeline re-mounts this editor; stealing focus there
+            // would pull it out of the RegionsArea and break region shortcuts (e.g. delete)
+            // until the region is clicked again (issue #292). Mirrors NoteEditor.
+            const active = document.activeElement
+            if (!isDefined(active) || active === document.body) {self.focus()}
+        }}>
+            {canvas}
+            {selectionRectangle}
+        </div>
+    )
+    const shortcuts = ShortcutManager.get().createContext(element, "ValueEditor")
+    lifecycle.ownAll(
+        shortcuts,
+        shortcuts.register(ContentEditorShortcuts["select-all"].shortcut, () =>
+            selection.select(...selectableLocator.selectable())),
+        shortcuts.register(ContentEditorShortcuts["deselect-all"].shortcut, () =>
+            selection.deselectAll()),
+        shortcuts.register(ContentEditorShortcuts["delete-selection"].shortcut, () => {
+            const selected = selection.selected()
+            if (selected.length === 0) {return false}
+            editing.modify(() => selected.forEach(adapter => ValueEventEditing.deleteEvent(reader.content, adapter)))
+            return true
+        }),
+        Dragging.attach(canvas, (event: PointerEvent) => {
+            const target: Nullable<ValueCaptureTarget> = capturing.captureEvent(event)
+            if (target === null) {return Option.None}
+            if (target.type === "event" && !selection.isEmpty()) {
+                const clientRect = canvas.getBoundingClientRect()
+                return modifyContext.startModifier(ValueMoveModifier.create({
+                    editing,
+                    element: canvas,
+                    context,
+                    selection,
+                    snapping,
+                    pointerValue: valueAxis.axisToValue(event.clientY - clientRect.top),
+                    pointerPulse: range.xToUnit(event.clientX - clientRect.left),
+                    valueAxis,
+                    eventMapping,
+                    reference: target.event,
+                    collection: reader.content
+                }))
+            } else if ((target.type === "midpoint" && !selection.isEmpty())
+                || (bendSegments && !event.shiftKey && (target.type === "curve" || target.type === "midpoint"))) {
+                return modifyContext.startModifier(ValueSlopeModifier.create({
+                    editing,
+                    element: canvas,
+                    valueAxis,
+                    reference: target.event,
+                    collection: reader.content
+                }))
+            } else {
+                return Option.None
+            }
+        }, {permanentUpdates: true}),
+        Html.watchResize(canvas, painter.requestUpdate),
+        range.subscribe(painter.requestUpdate),
+        reader.timelineBoxAdapter.signatureTrack.subscribe(painter.requestUpdate),
+        snapping.subscribe(painter.requestUpdate),
+        reader.subscribeChange(painter.requestUpdate),
+        reader.subscribeChange(() => segment.ifSome(adapter => {
+            if (!reader.hasContent || !reader.content.events.contains(adapter)) {segment.clear()}
+        })),
+        segment.subscribe(painter.requestUpdate),
+        context.anchorModel.subscribe(painter.requestUpdate),
+        modifyContext.subscribeUpdate(painter.requestUpdate),
+        installCursor(canvas, capturing, {
+            get: (target, event) => {
+                const onCurve = target?.type === "curve" || target?.type === "midpoint"
+                const controlKey = event.altKey && event.buttons === 0
+                if (target === null) {
+                    if (controlKey) {return Cursor.Pencil}
+                } else if (target.type === "event") {
+                    return "default"
+                } else {
+                    if (event.shiftKey && onCurve) {
+                        return "default"
+                    } else if (target.type === "midpoint" || (bendSegments && onCurve)) {
+                        return "ns-resize"
+                    } else if (target.type === "loop-duration") {
+                        return "ew-resize"
+                    }
+                }
+                return null
+            },
+            leave: EmptyExec
+        }),
+        Events.subscribe(canvas, "keydown", event => {
+            if (event.key !== "Enter" || segment.isEmpty()) {return}
+            event.stopImmediatePropagation()
+            const adapter = segment.unwrap()
+            const interpolation = adapter.interpolation
+            const slope = interpolation.type === "curve" ? interpolation.slope : 0.5
+            const resolvers = Promise.withResolvers<string>()
+            const surface = Surface.get(canvas)
+            surface.flyout.appendChild(FloatingTextInput({
+                numeric: true,
+                position: Point.add(surface.pointer, {x: 0, y: 16}),
+                value: SlopeStringMapping.x(slope).value,
+                resolvers
+            }))
+            resolvers.promise.then(text => {
+                const bend = parseFloat(text)
+                if (isNaN(bend)) {return}
+                editing.modify(() => {adapter.interpolation = Interpolation.Curve(clampUnit(bend / 200.0 + 0.5))})
+            }, EmptyExec)
+        }),
+        installValueInput({
+            element: canvas,
+            selection,
+            getter: (adapter) => context.stringMapping.x(context.valueMapping.y(eventMapping.x(adapter.value))).value,
+            setter: text => {
+                const result = context.stringMapping.y(text)
+                let value
+                if (result.type === "explicit") {
+                    value = eventMapping.y(context.valueMapping.x(result.value))
+                } else {return}
+                editing.modify(() => selection.selected().forEach(adapter => adapter.box.value.setValue(value)))
+            }
+        }),
+        installValueContextMenu({element: canvas, capturing, editing, selection}),
+        ClipboardManager.install(element, ValuesClipboard.createHandler({
+            getEnabled: () => !engine.isPlaying.getValue(),
+            getPosition: () => engine.position.getValue() - reader.offset,
+            setPosition: position => engine.setPosition(position + reader.offset),
+            editing,
+            selection,
+            collection: reader.content,
+            targetAddress: reader.content.box.events.address,
+            boxGraph,
+            boxAdapters
+        }))
+    )
+    return element
+}

@@ -1,0 +1,82 @@
+diff --git a/crates/engine/src/audio_region_player.rs b/crates/engine/src/audio_region_player.rs
+--- a/crates/engine/src/audio_region_player.rs
++++ b/crates/engine/src/audio_region_player.rs
+@@ -902,7 +902,10 @@
+     let mut fade_out = 1.0f32;
+     if region.fade_in > 0.0 {
+         if position < region.fade_in {
+-            fade_in = normalized_at((position / region.fade_in) as f32, region.fade_in_slope);
++            let progress = (position / region.fade_in) as f32;
++            fade_in = if region.fade_in_equal_power {
++                math::sin(progress.clamp(0.0, 1.0) * core::f32::consts::FRAC_PI_2)
++            } else { normalized_at(progress, region.fade_in_slope) };
+         }
+     } else if declick_in && declick_pulses > 0.0 && position < declick_pulses {
+         fade_in = (position / declick_pulses).clamp(0.0, 1.0) as f32;
+@@ -911,7 +914,9 @@
+         let fade_out_start = duration - region.fade_out;
+         if position > fade_out_start {
+             let progress = ((position - fade_out_start) / region.fade_out) as f32;
+-            fade_out = 1.0 - normalized_at(progress, region.fade_out_slope);
++            fade_out = if region.fade_out_equal_power {
++                math::cos(progress.clamp(0.0, 1.0) * core::f32::consts::FRAC_PI_2).max(0.0)
++            } else { 1.0 - normalized_at(progress, region.fade_out_slope) };
+         }
+     } else if declick_out && declick_pulses > 0.0 && position > duration - declick_pulses {
+         fade_out = ((duration - position) / declick_pulses).clamp(0.0, 1.0) as f32;
+@@ -959,7 +964,7 @@
+         AudioRegion {
+             region_uuid: [1u8; 16], position: 0.0, duration: 96_000.0, loop_offset: 0.0, loop_duration: 96_000.0,
+             file: [9u8; 16], gain_db, mute: false, waveform_offset: 0.0, fade_in, fade_out,
+-            fade_in_slope: 0.5, fade_out_slope: 0.5, warp: Vec::new(), time_stretch: None, signalsmith: None, transients: Vec::new()
++            fade_in_slope: 0.5, fade_out_slope: 0.5, fade_in_equal_power: false, fade_out_equal_power: false, warp: Vec::new(), time_stretch: None, signalsmith: None, transients: Vec::new()
+         }
+     }
+ 
+diff --git a/crates/engine/src/audio_unit/tracks/audio.rs b/crates/engine/src/audio_unit/tracks/audio.rs
+--- a/crates/engine/src/audio_unit/tracks/audio.rs
++++ b/crates/engine/src/audio_unit/tracks/audio.rs
+@@ -127,6 +127,8 @@
+     pub(crate) waveform_offset: f64, // seconds
+     pub(crate) fade_in: f64,         // ppqn
+     pub(crate) fade_out: f64,        // ppqn
++    pub(crate) fade_in_equal_power: bool,
++    pub(crate) fade_out_equal_power: bool,
+     pub(crate) fade_in_slope: f32,   // 0..1 ratio
+     pub(crate) fade_out_slope: f32,  // 0..1 ratio
+     // PitchStretch play-mode warp markers (content ppqn -> source seconds), sorted by ppqn. EMPTY = no
+@@ -168,6 +170,8 @@
+     let seconds_base = seconds_time_base(graph, region_uuid, AUDIO_REGION_TIMEBASE_KEY);
+     let position = region_pulses(graph, region_uuid, 10);
+     let to_ppqn = |value: f64| if seconds_base { tempo_map.seconds_span_to_ppqn(position, value) } else { value };
++    let equal_power = |key: u16| graph.field_value(&Address::of(region_uuid, vec![AUDIO_REGION_FADING_KEY, key]))
++        .and_then(|value| value.as_bool()).unwrap_or(false);
+     let time_stretch = read_time_stretch(graph, region_uuid);
+     // The source transient onsets are only needed for the time-stretch sequencer; skip the read otherwise.
+     let transients = if time_stretch.is_some() { read_transients(graph, file) } else { Vec::new() };
+@@ -183,6 +187,8 @@
+         waveform_offset: region_float(graph, region_uuid, &[AUDIO_REGION_WAVEFORM_OFFSET_KEY]) as f64,
+         fade_in: region_float(graph, region_uuid, &[AUDIO_REGION_FADING_KEY, 1]) as f64,
+         fade_out: region_float(graph, region_uuid, &[AUDIO_REGION_FADING_KEY, 2]) as f64,
++        fade_in_equal_power: equal_power(5),
++        fade_out_equal_power: equal_power(6),
+         fade_in_slope: region_float(graph, region_uuid, &[AUDIO_REGION_FADING_KEY, 3]),
+         fade_out_slope: region_float(graph, region_uuid, &[AUDIO_REGION_FADING_KEY, 4]),
+         warp: read_warp_markers(graph, region_uuid),
+@@ -392,6 +398,8 @@
+         waveform_offset: region_float(graph, clip_uuid, &[AUDIO_CLIP_WAVEFORM_OFFSET_KEY]) as f64,
+         fade_in: 0.0,
+         fade_out: 0.0,
++        fade_in_equal_power: false,
++        fade_out_equal_power: false,
+         fade_in_slope: 0.0,
+         fade_out_slope: 0.0,
+         warp: read_warp_markers(graph, clip_uuid),
+diff --git a/crates/studio-boxes/src/registry.rs b/crates/studio-boxes/src/registry.rs
+--- a/crates/studio-boxes/src/registry.rs
++++ b/crates/studio-boxes/src/registry.rs
+@@ -33,3 +33,3 @@
+         ("SignatureEventBox".to_string(), Schema::from([(1u16, FieldType::Pointer), (9u16, FieldType::Int32), (10u16, FieldType::Int32), (21u16, FieldType::Int32), (22u16, FieldType::Int32)])),
+-        ("AudioRegionBox".to_string(), Schema::from([(1u16, FieldType::Pointer), (2u16, FieldType::Pointer), (4u16, FieldType::String), (5u16, FieldType::Pointer), (7u16, FieldType::Float32), (8u16, FieldType::Pointer), (10u16, FieldType::Int32), (11u16, FieldType::Float32), (12u16, FieldType::Float32), (13u16, FieldType::Float32), (14u16, FieldType::Boolean), (15u16, FieldType::String), (16u16, FieldType::Int32), (17u16, FieldType::Float32), (18u16, FieldType::Object(Schema::from([(1u16, FieldType::Float32), (2u16, FieldType::Float32), (3u16, FieldType::Float32), (4u16, FieldType::Float32)])))])),
++        ("AudioRegionBox".to_string(), Schema::from([(1u16, FieldType::Pointer), (2u16, FieldType::Pointer), (4u16, FieldType::String), (5u16, FieldType::Pointer), (7u16, FieldType::Float32), (8u16, FieldType::Pointer), (10u16, FieldType::Int32), (11u16, FieldType::Float32), (12u16, FieldType::Float32), (13u16, FieldType::Float32), (14u16, FieldType::Boolean), (15u16, FieldType::String), (16u16, FieldType::Int32), (17u16, FieldType::Float32), (18u16, FieldType::Object(Schema::from([(1u16, FieldType::Float32), (2u16, FieldType::Float32), (3u16, FieldType::Float32), (4u16, FieldType::Float32), (5u16, FieldType::Boolean), (6u16, FieldType::Boolean)])))])),
+         ("AudioClipBox".to_string(), Schema::from([(1u16, FieldType::Pointer), (2u16, FieldType::Pointer), (3u16, FieldType::Int32), (4u16, FieldType::Object(Schema::from([(1u16, FieldType::Boolean), (2u16, FieldType::Boolean), (4u16, FieldType::Int32), (5u16, FieldType::Int32), (6u16, FieldType::Int32)]))), (5u16, FieldType::Pointer), (7u16, FieldType::Float32), (8u16, FieldType::Pointer), (10u16, FieldType::Float32), (11u16, FieldType::Boolean), (12u16, FieldType::String), (13u16, FieldType::Int32), (14u16, FieldType::Float32), (21u16, FieldType::String)])),

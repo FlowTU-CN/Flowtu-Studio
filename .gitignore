@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.DS_Store
+.openai/*.local.json
+test-results/
+opendaw/public/wasm-engine/
+opendaw/public/flowtu-source.tar.gz
+opendaw/public/build-info.json

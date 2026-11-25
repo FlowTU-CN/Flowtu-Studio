@@ -1,0 +1,55 @@
+.flowtu-dock-panel.closed { display: none; }
+
+.flowtu-panel-cards {
+    display: flex;
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    flex: none;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 4px 12px;
+    padding: 4px 8px;
+    background: #111c27;
+    border-block: 1px solid #2a3a49;
+    font: 12px/1.2 system-ui, sans-serif;
+}
+.flowtu-panel-cards > div { display: flex; align-items: center; gap: 4px; }
+.flowtu-panel-cards button {
+    box-sizing: border-box;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    min-height: 26px;
+    padding: 3px 10px;
+    border: 1px solid #344756;
+    border-radius: 6px;
+    color: #b4c6d6;
+    background: #1b2835;
+    font: inherit;
+    cursor: pointer;
+}
+.flowtu-panel-cards button:hover { background: #263b4d; color: #f1f6fb; }
+.flowtu-panel-cards .dock-choices button[aria-pressed="true"] {
+    background: #244563;
+    border-color: #5b8fb6;
+    color: #eef8ff;
+}
+.flowtu-panel-cards .dock-choices svg { width: 14px; height: 14px; }
+.flowtu-panel-cards .dock-mode {
+    gap: 1px;
+    padding: 2px;
+    border-radius: 6px;
+    background: #0c151d;
+}
+.flowtu-panel-cards .dock-mode button {
+    min-height: 22px;
+    padding: 2px 8px;
+    border-color: transparent;
+    background: transparent;
+    font-size: 11px;
+}
+.flowtu-panel-cards .dock-mode button[aria-pressed="true"] { background: #2b3b4b; color: #f2f7fa; }
+.flowtu-panel-cards button:focus-visible { outline: 2px solid #83bce4; outline-offset: 1px; }

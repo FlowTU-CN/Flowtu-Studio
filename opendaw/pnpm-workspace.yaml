@@ -1,0 +1,25 @@
+allowBuilds:
+  esbuild: true
+  "@parcel/watcher": false
+  leveldown: false
+  protobufjs: false
+overrides:
+  "@opendaw/lib-box": "0.0.99"
+  "@opendaw/lib-dom": "0.0.93"
+  "@opendaw/lib-dsp": "0.0.97"
+  "@opendaw/lib-jsx": "0.0.95"
+  "@opendaw/lib-midi": "0.0.78"
+  "@opendaw/lib-runtime": "0.0.89"
+  "@opendaw/lib-std": "0.0.88"
+  "@opendaw/studio-adapters": "0.3.9"
+  "@opendaw/studio-boxes": "0.0.115"
+  "@opendaw/studio-core": "0.2.11"
+  "@opendaw/studio-core-wasm": "0.0.22"
+  "@opendaw/studio-enums": "0.1.8"
+  "@opendaw/studio-p2p": "0.0.40"
+  "@opendaw/studio-scripting": "0.0.91"
+shamefullyHoist: true
+patchedDependencies:
+  "@opendaw/studio-adapters@0.3.9": patches/tempo-map-bypass.patch
+  "@opendaw/studio-boxes@0.0.115": patches/region-equal-power.patch
+  "@opendaw/studio-core@0.2.11": patches/keep-shared-sample.patch

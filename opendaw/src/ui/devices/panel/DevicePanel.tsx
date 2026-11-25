@@ -1,0 +1,399 @@
+import {deleteUnitWithMedia} from "@/flowtu/track-delete"
+import css from "./DevicePanel.sass?inline"
+import {
+    asDefined,
+    isAbsent,
+    isInstanceOf,
+    isNotNull,
+    Lifecycle,
+    MutableObservableOption,
+    Nullable,
+    ObservableOption,
+    Option,
+    Terminable,
+    Terminator,
+    UUID
+} from "@opendaw/lib-std"
+import {appendChildren, createElement, JsxValue} from "@opendaw/lib-jsx"
+import {StudioService} from "@/service/StudioService"
+import {AudioUnitBox, BoxVisitor, InstrumentCompositeCellBox, PlayfieldSampleBox} from "@opendaw/studio-boxes"
+import {
+    AudioEffectDeviceAdapter,
+    AudioUnitInputAdapter,
+    DeviceHost,
+    Devices,
+    IndexedBoxAdapterCollection,
+    InstrumentCompositeCellBoxAdapter,
+    MidiEffectDeviceAdapter,
+    PlayfieldSampleBoxAdapter
+} from "@opendaw/studio-adapters"
+import {ScrollModel} from "@/ui/components/ScrollModel.ts"
+import {Orientation, Scroller} from "@/ui/components/Scroller"
+import {DeviceMidiMeter} from "@/ui/devices/panel/DeviceMidiMeter.tsx"
+import {ChannelStrip} from "@/ui/mixer/ChannelStrip"
+import {installAutoScroll} from "@/ui/AutoScroll"
+import {deferNextFrame, Events, Html, Keyboard, ShortcutManager} from "@opendaw/lib-dom"
+import {DevicePanelShortcuts} from "@/ui/shortcuts/DevicePanelShortcuts"
+import {DevicePanelDragAndDrop} from "@/ui/devices/DevicePanelDragAndDrop"
+import {CompositeCellEditor} from "@/ui/devices/CompositeCellEditor"
+import {NoAudioUnitSelectedPlaceholder} from "@/ui/devices/panel/NoAudioUnitSelectedPlaceholder"
+import {AddEffectButton} from "@/ui/devices/AddEffectButton"
+import {DeviceMount} from "@/ui/devices/panel/DeviceMount"
+import {Box} from "@opendaw/lib-box"
+import {Pointers} from "@opendaw/studio-enums"
+import {DevicesClipboard, type EffectFactory, Project, ProjectProfile} from "@opendaw/studio-core"
+import {ShadertoyPreview} from "@/ui/devices/panel/ShadertoyPreview"
+import {GlobalShortcuts} from "@/ui/shortcuts/GlobalShortcuts"
+import {WheelScaling} from "@/ui/timeline/WheelScaling"
+
+const className = Html.adoptStyleSheet(css, "DevicePanel")
+
+type MovableParent = Element & { moveBefore(node: Node, child: Nullable<Node>): void }
+
+const canMoveBefore = (element: Element): element is MovableParent => typeof Reflect.get(element, "moveBefore") === "function"
+
+const flattenElements = (values: ReadonlyArray<JsxValue>): ReadonlyArray<Element> =>
+    values.flatMap(value => Array.isArray(value) ? flattenElements(value) : isInstanceOf(value, Element) ? [value] : [])
+
+// Detaching an editor reloads its iframes (script views), so surviving editors stay attached and only move if needed.
+const reconcileChildren = (container: Element, ...values: ReadonlyArray<JsxValue>): void => {
+    const children = flattenElements(values)
+    const keep = new Set<Element>(children)
+    Array.from(container.children).forEach(child => {if (!keep.has(child)) {child.remove()}})
+    children.forEach((child, index) => {
+        const current = container.children.item(index)
+        if (current === child) {return}
+        if (child.isConnected && container.isConnected && canMoveBefore(container)) {
+            container.moveBefore(child, current)
+        } else {
+            container.insertBefore(child, current)
+        }
+    })
+}
+
+type Construct = {
+    lifecycle: Lifecycle
+    service: StudioService
+}
+
+type Context = { deviceHost: DeviceHost, instrument: ObservableOption<AudioUnitInputAdapter> }
+
+export const DevicePanel = ({lifecycle, service}: Construct) => {
+    const cellContainer: HTMLElement = <div className="cell-container"/>
+    const midiEffectsContainer: HTMLElement = <div className="midi-container"/>
+    const instrumentContainer: HTMLElement = <div className="source-container"/>
+    const audioEffectsContainer: HTMLElement = <div className="audio-container"/>
+    const channelStripContainer: HTMLElement = <div className="channel-strip-container"/>
+    const noAudioUnitSelectedPlaceholder: HTMLElement = (
+        <NoAudioUnitSelectedPlaceholder lifecycle={lifecycle} service={service}/>
+    )
+    const containers: HTMLElement = (
+        <div className="containers">
+            {cellContainer}
+            {midiEffectsContainer}
+            {instrumentContainer}
+            {audioEffectsContainer}
+        </div>
+    )
+    const devices: HTMLElement = (
+        <div className="editors">
+            {containers}
+            {noAudioUnitSelectedPlaceholder}
+        </div>
+    )
+    const scrollModel = new ScrollModel()
+    const updateScroller = (): void => {
+        scrollModel.visibleSize = devices.clientWidth
+        scrollModel.contentSize = containers.clientWidth
+    }
+
+    const getContext = (project: Project, box: Box): Context => {
+        const deviceHost = project.boxAdapters.adapterFor(box, Devices.isHost)
+        return asDefined(box.accept<BoxVisitor<Context>>({
+            visitAudioUnitBox: (_box: AudioUnitBox): Context => ({
+                deviceHost,
+                instrument: deviceHost.audioUnitBoxAdapter().input.adapter()
+            }),
+            visitPlayfieldSampleBox: (box: PlayfieldSampleBox): Context => ({
+                deviceHost,
+                instrument: new MutableObservableOption(project.boxAdapters.adapterFor(box, PlayfieldSampleBoxAdapter))
+            }),
+            // A composite ENTRY is a host in its own right, but hosts no instrument: its signal comes from the
+            // composite. The instrument slot shows the way back out instead (see `updateDom`).
+            visitAudioEffectCompositeCellBox: (): Context => ({deviceHost, instrument: new MutableObservableOption()}),
+            visitInstrumentCompositeCellBox: (box: InstrumentCompositeCellBox): Context => ({
+                deviceHost,
+                instrument: project.boxAdapters.adapterFor(box, InstrumentCompositeCellBoxAdapter).input.adapter()
+            })
+        }))
+    }
+
+    const chainLifecycle = lifecycle.own(new Terminator())
+    const mounts = UUID.newSet<DeviceMount>(({uuid}) => uuid)
+    const updateDom = lifecycle.own(deferNextFrame(() => {
+        // Emptying the containers detaches the focused device header, and the browser drops focus to <body>. The
+        // panel's Ctrl+D context is focus-scoped, so without restoring it the next press falls through to the
+        // global shortcut and duplicates the whole audio unit instead of the selected effect.
+        const activeElement = document.activeElement
+        const previouslyFocused: Nullable<HTMLElement> = isInstanceOf(activeElement, HTMLElement)
+            && element.contains(activeElement) ? activeElement : null
+        Html.empty(cellContainer)
+        Html.empty(channelStripContainer)
+        chainLifecycle.terminate()
+        const clearChains = (): void => [midiEffectsContainer, instrumentContainer, audioEffectsContainer].forEach(Html.empty)
+        const profile = service.projectProfileService.getValue()
+        if (profile.isEmpty()) {
+            clearChains()
+            return
+        }
+        const {project} = profile.unwrap()
+        const optEditing = project.userEditingManager.audioUnit.get()
+        noAudioUnitSelectedPlaceholder.classList.toggle("hidden", optEditing.nonEmpty())
+        if (optEditing.isEmpty()) {
+            clearChains()
+            return
+        }
+        const {deviceHost, instrument} = getContext(project, optEditing.unwrap().box)
+        if (deviceHost.hostsInstrument && deviceHost.asCompositeCell().nonEmpty()) {
+            appendChildren(cellContainer, <CompositeCellEditor lifecycle={chainLifecycle} service={service} host={deviceHost}/>)
+        }
+        const midiLead: JsxValue = instrument.match({
+            none: () => null,
+            some: (input: AudioUnitInputAdapter) => input.accepts === "midi"
+                ? (
+                    <div style={{margin: "1.125rem 0 0 0"}}>
+                        <DeviceMidiMeter lifecycle={chainLifecycle}
+                                         receiver={project.liveStreamReceiver}
+                                         address={deviceHost.audioUnitBoxAdapter().address}/>
+                    </div>
+                )
+                // Same footprint as the midi meter (8px + 0.25em margins), so every instrument-hosting chain
+                // (a Playfield slot, Tape) aligns with the midi-metered ones.
+                : <div style={{width: "1em"}}/>
+        })
+        // A ONE-SIDED host (a composite entry) hosts only one chain kind; the section it does not host stays empty.
+        const midiAdapters = deviceHost.midiEffects.mapOr(chain => chain.adapters(), [])
+        const insert = (kind: "audio" | "midi", previous?: AudioEffectDeviceAdapter | MidiEffectDeviceAdapter) => {
+            const field = DeviceHost.chainFieldOf(deviceHost, kind).unwrap()
+            const title = previous ? "Add effect after " + previous.labelField.getValue() : "Add effect after input"
+            return <div className="ft-device-insert"><AddEffectButton label={kind === "midi" ? "MIDI FX" : "Add FX"} title={title}
+                kind={kind} select={(factory: EffectFactory) => {
+                    if (!field.box.isAttached() || (previous && !previous.box.isAttached())) return
+                    project.editing.modify(() => project.api.insertEffect(field, factory, previous ? previous.indexField.getValue() + 1 : 0))
+                }}/></div>
+        }
+        reconcileChildren(midiEffectsContainer, midiLead, ...midiAdapters.flatMap(adapter =>
+            [mounts.get(adapter.uuid).editor(), insert("midi", adapter)]))
+        // A composite entry's back editor is AUDIO, so its slot line reads blue, not the instrument green.
+        instrumentContainer.classList.toggle("as-audio", instrument.isEmpty() && !deviceHost.hostsInstrument)
+        reconcileChildren(instrumentContainer, instrument.match({
+            // A host that holds no instrument AT ALL is a composite entry: show the way back out, not a void.
+            none: () => deviceHost.hostsInstrument
+                ? <div/>
+                : <CompositeCellEditor lifecycle={chainLifecycle} service={service} host={deviceHost}/>,
+            some: (type: AudioUnitInputAdapter) => mounts.get(type.uuid).editor()
+        }))
+        const audioAdapters = deviceHost.audioEffects.mapOr(chain => chain.adapters(), [])
+        reconcileChildren(audioEffectsContainer, deviceHost.audioEffectsField.nonEmpty() ? insert("audio") : null,
+            ...audioAdapters.flatMap(adapter => [mounts.get(adapter.uuid).editor(), insert("audio", adapter)]))
+        appendChildren(channelStripContainer, (
+            <ChannelStrip lifecycle={chainLifecycle}
+                          service={service}
+                          adapter={deviceHost.audioUnitBoxAdapter()}
+                          compact={true}/>
+        ))
+        updateScroller()
+        if (isNotNull(previouslyFocused)) {
+            // A surviving mount keeps its element, so the same header can take the focus back. A device that is
+            // gone (cut, replaced) hands it to whatever is selected now.
+            Option.wrap(previouslyFocused.isConnected
+                ? previouslyFocused
+                : containers.querySelector<HTMLElement>("header.selected")).ifSome(target => target.focus())
+        }
+    }))
+
+    const subscribeChain = ({midiEffects, instrument, audioEffects, host}: {
+        midiEffects: Option<IndexedBoxAdapterCollection<MidiEffectDeviceAdapter, Pointers.MIDIEffectHost>>,
+        instrument: ObservableOption<AudioUnitInputAdapter>,
+        audioEffects: Option<IndexedBoxAdapterCollection<AudioEffectDeviceAdapter, Pointers.AudioEffectHost>>,
+        host: DeviceHost
+    }): Terminable => {
+        const terminator = new Terminator()
+        const instrumentLifecycle = new Terminator()
+        // A ONE-SIDED host has no chain of the other kind: nothing to observe, nothing to mount.
+        midiEffects.ifSome(chain => terminator.own(chain.catchupAndSubscribe({
+            onAdd: (adapter: MidiEffectDeviceAdapter) => {
+                mounts.add(DeviceMount.forMidiEffect(service, adapter, host, updateDom.request))
+                updateDom.request()
+            },
+            onRemove: (adapter: MidiEffectDeviceAdapter) => {
+                mounts.removeByKey(adapter.uuid).terminate()
+                updateDom.request()
+            },
+            onReorder: (_adapter: MidiEffectDeviceAdapter) => updateDom.request()
+        })))
+        terminator.ownAll(
+            instrument.catchupAndSubscribe(owner => {
+                instrumentLifecycle.terminate()
+                owner.ifSome(adapter => {
+                    mounts.add(DeviceMount.forInstrument(service, adapter, host, updateDom.request))
+                    instrumentLifecycle.own({
+                        terminate: () => {
+                            mounts.removeByKey(adapter.uuid).terminate()
+                            updateDom.request()
+                        }
+                    })
+                })
+                updateDom.request()
+            })
+        )
+        audioEffects.ifSome(chain => terminator.own(chain.catchupAndSubscribe({
+            onAdd: (adapter: AudioEffectDeviceAdapter) => {
+                mounts.add(DeviceMount.forAudioEffect(service, adapter, host, updateDom.request))
+                updateDom.request()
+            },
+            onRemove: (adapter: AudioEffectDeviceAdapter) => {
+                mounts.removeByKey(adapter.uuid).terminate()
+                updateDom.request()
+            },
+            onReorder: (_adapter: AudioEffectDeviceAdapter) => updateDom.request()
+        })))
+        terminator.own({
+            terminate: () => {
+                mounts.forEach(mount => mount.terminate())
+                mounts.clear()
+                updateDom.request()
+            }
+        })
+        updateDom.request()
+        return terminator
+    }
+
+    const updateFrozenState = (): void => {
+        const profile = service.projectProfileService.getValue()
+        if (profile.isEmpty()) {return}
+        const project = profile.unwrap().project
+        const optEditing = project.userEditingManager.audioUnit.get()
+        if (optEditing.isEmpty()) {return}
+        const audioUnitBoxAdapter = project.boxAdapters
+            .adapterFor(optEditing.unwrap().box, Devices.isHost).audioUnitBoxAdapter()
+        containers.classList.toggle("frozen", project.audioUnitFreeze.isFrozen(audioUnitBoxAdapter))
+    }
+    const freezeLifecycle = lifecycle.own(new Terminator())
+    const chainLifeTime = lifecycle.own(new Terminator())
+    lifecycle.own(service.projectProfileService.catchupAndSubscribe((option: Option<ProjectProfile>) => {
+            chainLifeTime.terminate()
+            freezeLifecycle.terminate()
+            option.ifSome(({project}) => {
+                freezeLifecycle.own(project.audioUnitFreeze.subscribe(() => updateFrozenState()))
+                project.userEditingManager.audioUnit.catchupAndSubscribe((target) => {
+                    chainLifeTime.terminate()
+                    if (target.isEmpty()) {return}
+                    const editingBox = target.unwrap().box
+                    const {deviceHost, instrument} = getContext(project, editingBox)
+                    chainLifeTime.own(subscribeChain({
+                        midiEffects: deviceHost.midiEffects,
+                        instrument,
+                        audioEffects: deviceHost.audioEffects,
+                        host: deviceHost
+                    }))
+                    updateFrozenState()
+                })
+            })
+        })
+    )
+    const element: HTMLElement = (
+        <div className={className}>
+            <div className="devices">
+                {devices}
+                <Scroller lifecycle={lifecycle} model={scrollModel} floating={true}
+                          orientation={Orientation.horizontal}/>
+            </div>
+            {channelStripContainer}
+            <ShadertoyPreview lifecycle={lifecycle} service={service}/>
+        </div>
+    )
+    updateDom.request()
+    const getCurrentDeviceHost = (): Option<DeviceHost> => {
+        const profile = service.projectProfileService.getValue()
+        if (profile.isEmpty()) {return Option.None}
+        const {project} = profile.unwrap()
+        const optEditing = project.userEditingManager.audioUnit.get()
+        if (optEditing.isEmpty()) {return Option.None}
+        return Option.wrap(project.boxAdapters.adapterFor(optEditing.unwrap().box, Devices.isHost))
+    }
+    // Element-scoped shortcut context: active only while focus is inside
+    // the instrument container, so Delete on the focused instrument removes
+    // the whole audio unit without competing with global Delete handling.
+    const instrumentShortcuts = ShortcutManager.get().createContext(instrumentContainer, "DevicePanel/Instrument")
+    // Panel-scoped Ctrl+D: duplicate the selected effect(s). When no effect is selected it returns false so the
+    // global "copy-device" shortcut takes over and duplicates the whole audio unit instead. Higher priority than
+    // the global context so it is consulted first while focus is inside the panel.
+    const effectShortcuts = ShortcutManager.get().createContext(element, "DevicePanel/Effects", 1)
+    lifecycle.ownAll(
+        instrumentShortcuts,
+        effectShortcuts,
+        effectShortcuts.register(GlobalShortcuts["copy-device"].shortcut, () => {
+            const {editing, deviceSelection, boxGraph, boxAdapters} = service.project
+            const effects = deviceSelection.selected().filter(adapter => adapter.type !== "instrument")
+            if (effects.length === 0) {return false}
+            const host = effects[0].deviceHost()
+            DevicesClipboard.duplicate({
+                getEnabled: () => true,
+                editing, selection: deviceSelection, boxGraph, boxAdapters,
+                getHost: () => Option.wrap(host)
+            })
+            return true
+        }),
+        instrumentShortcuts.register(DevicePanelShortcuts["delete-audio-unit"].shortcut, () => {
+            const optHost = getCurrentDeviceHost()
+            if (optHost.isEmpty()) {return false}
+            const audioUnit = optHost.unwrap().audioUnitBoxAdapter()
+            if (audioUnit.isOutput) {return false}
+            deleteUnitWithMedia(service.project, audioUnit)
+            return true
+        }),
+        Html.watchResize(element, updateScroller),
+        scrollModel.subscribe(() => devices.scrollLeft = scrollModel.position),
+        Events.subscribe(element, "wheel", (event: WheelEvent) => {
+            if (event.altKey) {
+                event.preventDefault()
+                event.stopPropagation()
+                scrollModel.moveBy(WheelScaling.pixelsOf(event))
+                return
+            }
+            scrollModel.moveBy(event.deltaX)
+        }, {passive: false}),
+        installAutoScroll(devices, (deltaX, _deltaY) => scrollModel.position += deltaX,
+            {padding: [0, 32, 0, 0], dragPadding: [0, 32, 0, 32]}),
+        DevicePanelDragAndDrop.install(service.project, devices, midiEffectsContainer, instrumentContainer, audioEffectsContainer),
+        Events.subscribe(devices, "pointerdown", (event: PointerEvent) => {
+            const target = event.target
+            if (target instanceof Element && isAbsent(target.closest("[data-drag]"))) {
+                service.project.deviceSelection.deselectAll()
+            }
+        }),
+        Events.subscribe(element, "keydown", (event: KeyboardEvent) => {
+            if (Keyboard.isDelete(event)) {
+                const {deviceSelection, editing} = service.project
+                if (deviceSelection.isEmpty()) {return}
+                const optHost = getCurrentDeviceHost()
+                if (optHost.isEmpty()) {return}
+                const host = optHost.unwrap()
+                const selected = new Set(deviceSelection.selected().filter(adapter => adapter.type !== "instrument"))
+                if (selected.size === 0) {return}
+                event.preventDefault()
+                const remainingMidi = host.midiEffects
+                    .mapOr(chain => chain.adapters().filter(adapter => !selected.has(adapter)), [])
+                const remainingAudio = host.audioEffects
+                    .mapOr(chain => chain.adapters().filter(adapter => !selected.has(adapter)), [])
+                editing.modify(() => {
+                    selected.forEach(adapter => adapter.box.delete())
+                    remainingMidi.forEach((adapter, index) => adapter.indexField.setValue(index))
+                    remainingAudio.forEach((adapter, index) => adapter.indexField.setValue(index))
+                })
+            }
+        })
+    )
+    return element
+}

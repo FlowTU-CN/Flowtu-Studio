@@ -1,0 +1,62 @@
+.ft-asset-library {min-width:0;min-height:0;overflow:auto;padding:6px 1px;flex:1 1 auto;container:asset-library / inline-size}
+.ft-asset-library[hidden], .ft-asset-actions[hidden] {display:none}
+.ft-asset-library :is(input, select, button) {min-width:0;font:inherit}
+.ft-asset-filters {display:grid;align-items:center;gap:4px;grid-template-columns:minmax(0,1fr) 68px auto}
+.ft-asset-library input {box-sizing:border-box;height:30px;min-width:0;border:1px solid #40566b;border-radius:6px;background:#0d1722;color:#e5eff6;padding:4px 7px}
+.ft-asset-filters input {width:100%;user-select:text}
+.ft-asset-filters input::placeholder {color:#a2b4c4;opacity:1}
+.ft-asset-filters select {box-sizing:border-box;width:100%}
+.ft-score .ft-asset-filters button {padding:4px 7px;height:30px}
+
+.ft-asset-list {display:grid;grid-template-columns:minmax(0,1fr);gap:4px;margin-top:6px}
+.ft-asset-list > p {color:#a7bbca;font-size:12px}
+.ft-asset-row, .ft-score .ft-film-card {
+    --preview-width:clamp(48px,20%,84px);
+    display:grid;grid-template-columns:var(--preview-width) minmax(0,1fr) auto auto;
+    align-items:center;column-gap:6px;min-width:0;padding:3px 5px 3px 3px;
+    border:1px solid #304255;border-radius:5px;background:#14202c;text-align:left;
+}
+.ft-asset-row {cursor:grab}
+.ft-asset-row:is(:focus-within,:hover), .ft-score .ft-film-card:hover {background:#192a38;border-color:#476073}
+.ft-asset-line {display:contents}
+.ft-asset-thumb {grid-area:1 / 1;display:block;width:100%;height:29px;border-radius:3px;background:#0a131c}
+.ft-asset-row .ft-asset-name {
+    grid-area:1 / 2;display:grid;gap:2px;padding:0;text-align:left;background:transparent;border:0;cursor:grab;
+}
+.ft-asset-name :is(strong,small), .ft-film-card :is(strong,small) {
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:1.2;
+}
+.ft-asset-name strong, .ft-film-card strong {font-size:12px;font-weight:600;color:#e6f0f6}
+.ft-asset-name small, .ft-film-card small {font-size:10px;color:#a3b5c6}
+.ft-asset-row :is(.ft-asset-play,.ft-asset-more,.ft-asset-deck) {
+    display:grid;place-items:center;min-height:22px;padding:2px 5px;font-size:11px;line-height:1;
+}
+.ft-asset-row .ft-asset-play {
+    grid-area:1 / 1;align-self:end;justify-self:start;z-index:1;
+    min-height:18px;width:19px;padding:0;background:#0c1826e0;color:#e6f1fb;border-radius:3px;
+}
+.ft-asset-row .ft-asset-play[aria-pressed=true] {color:#aadfff;border-color:#719bb9}
+.ft-asset-row .ft-asset-deck {grid-area:1 / 3}
+.ft-asset-row .ft-asset-more {grid-area:1 / 4}
+.ft-asset-actions {grid-column:1 / -1;display:flex;align-items:center;flex-wrap:wrap;gap:4px;padding-top:4px}
+.ft-asset-actions input {flex:1}
+.ft-asset-actions button {font-size:11px;padding:3px 5px}
+.ft-score .ft-film-card {grid-template-columns:var(--preview-width) minmax(0,1fr);row-gap:0}
+.ft-film-card .ft-film-thumb {grid-area:1 / 1 / 3 / 2;object-fit:contain;background:#050a10}
+.ft-film-card strong {grid-area:1 / 2;align-self:end}
+.ft-film-card small {grid-area:2 / 2;align-self:start}
+@container asset-library (max-width:270px) {
+    .ft-asset-row {--preview-width:44px;column-gap:4px}
+    .ft-asset-row .ft-asset-deck {width:23px}
+    .ft-asset-deck span {display:none}
+    .ft-asset-deck::before {content:"";width:10px;height:7px;border:1px solid currentColor;border-radius:1px;box-shadow:2px 2px 0 -1px #1e2b3b,2px 2px 0 currentColor}
+}
+.ft-generation-reference {display:flex;align-items:center;justify-content:space-between;gap:8px;padding:7px 9px;background:#152635;border:1px solid #39546b;border-radius:6px}
+.ft-generation-reference[hidden] {display:none}
+.ft-generation-reference > div {min-width:0;display:grid;gap:2px}
+.ft-generation-reference strong {overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ft-generation-reference small {color:#acc5d7}
+
+.ft-film-entry {display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:4px}
+.ft-media-remove {display:inline-grid;place-items:center}
+.ft-score .ft-film-entry .ft-media-remove {width:26px;height:28px;padding:0}

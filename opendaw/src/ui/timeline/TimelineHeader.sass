@@ -1,0 +1,134 @@
+@use "@/colors"
+
+component
+  width: var(--timeline-header-width)
+  min-height: 42px
+  display: grid
+  grid-template-columns: minmax(0, 1fr) auto
+  align-items: center
+  font-size: 0.75rem
+  @include colors.panel-background
+
+  .ft-timeline-controls
+    display: flex
+    flex-wrap: wrap
+    align-items: center
+    align-content: center
+    gap: 5px
+    padding: 4px 6px
+
+  .ft-ruler-menu-button
+    color: #b4ccdf
+    font: inherit
+    border: 1px solid #395266
+    background: #1b2a37
+    padding: 1px 5px
+    border-radius: 4px
+    cursor: pointer
+
+  .ft-ruler-labels
+    align-self: end
+    display: flex
+    flex-direction: column
+    font: 10px/1.2 system-ui
+    & > span
+      display: flex
+      align-items: center
+      justify-content: end
+      white-space: nowrap
+      height: 19px
+      border-block-end: 1px solid #25313d
+      padding-inline: 6px
+      color: #aec1ce
+    & > span[hidden], & > .ft-ruler-cue-label
+      display: none
+    html.ft-scoring-open & > .ft-ruler-cue-label
+      display: flex
+      height: var(--ft-cue-lane-height,24px)
+    & > [data-ruler=loop], & > .ft-ruler-bars-label
+      height: 16px
+    & > [data-ruler=notes]
+      height: 23px
+
+  .ft-ruler-menu
+    position: fixed
+    margin: 0
+    inset: auto
+    padding: 7px
+    border: 1px solid #415466
+    border-radius: 7px
+    background: #182530
+    color: #dce7ef
+    box-shadow: 0 6px 18px #0006
+    font: 12px/1.4 system-ui
+    min-width: 178px
+    max-height: 85vh
+    overflow: auto
+    color-scheme: dark
+    label
+      display: flex
+      align-items: center
+      gap: 7px
+      cursor: pointer
+      padding: 3px
+    input
+      accent-color: #72acda
+    select, button
+      font: inherit
+      color: inherit
+      border: 1px solid #435a6b
+      background: #223443
+      border-radius: 4px
+      margin: 2px 0
+      padding: 2px 5px
+    > button
+      display: block
+      width: 100%
+      margin-top: 5px
+      cursor: pointer
+
+  .ft-ruler-labels > .ft-work-label
+    height: 16px
+    box-sizing: border-box
+    > button
+      background: none
+      border: 0
+      color: #f0c7a5
+      cursor: pointer
+      font: inherit
+    .ft-work-dialog
+      position: fixed
+      inset: 0
+      margin: auto
+      padding: 18px
+      border: 1px solid #405667
+      border-radius: 9px
+      color: #e0eaf2
+      background: #142330
+      font: 13px/1.5 system-ui
+      &::backdrop
+        background: #0008
+      form
+        display: grid
+        gap: 10px
+      label, footer, .ft-work-presets
+        display: flex
+        gap: 8px
+        align-items: center
+        justify-content: space-between
+      input, button
+        color: inherit
+        background: #203547
+        padding: 4px 8px
+        border: 1px solid #485f71
+        border-radius: 4px
+      input
+        font: 13px ui-monospace, monospace
+      button
+        cursor: pointer
+      button:disabled
+        opacity: .45
+      footer
+        justify-content: end
+      output:empty
+        display: none

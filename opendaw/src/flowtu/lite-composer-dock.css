@@ -1,0 +1,124 @@
+.ft-floating-composer { display:none }
+.ft-floating-composer[hidden],.ft-floating-composer [hidden] { display: none !important }
+@media (min-width:900px) {
+    :root { --ft-folded-composer-height: calc(21px + 3mm) }
+    body:has(.ft-lite-dock.ft-composer-folded:not([hidden])) .ft-lite-native {
+        padding-bottom:var(--ft-folded-composer-height);
+    }
+    .ft-floating-composer:not([hidden]) {
+        position:fixed;
+        box-sizing:border-box; color:#f3f3f4; color-scheme:dark; font:400 14px/1.4 system-ui,sans-serif;
+        inset:auto 0 max(19px,env(safe-area-inset-bottom));
+        width:100%;height:auto;margin:0;border:0;background:transparent;overflow:visible;
+        z-index:100;
+        display:flex;
+        justify-content:center;
+        align-items:flex-end;
+        padding-inline:16px;
+        pointer-events:none;
+    }
+    .ft-lite-dock-glass {
+        position: relative;
+        width: var(--ft-dock-width,744px);
+        height: var(--ft-dock-height,113px);
+        box-sizing: border-box;
+        max-width: 100%;
+        min-width: 0;
+        display: grid;
+        grid-template-columns:minmax(0,1fr) auto;
+        grid-template-rows:auto minmax(0,1fr);
+        gap:5px 12px;
+        align-content: stretch;
+        padding:10px 14px 12px 18px;
+        pointer-events:auto;
+        border: 1px solid #c0d1dd48;
+        border-top-color: #d2deeb73;
+        border-bottom-color: #a7aba43e;
+        border-radius: 21px;
+        background: linear-gradient(112deg,#35434d,#292d36 62%,#443d37);
+        box-shadow:0 10px 25px -6px #0009,0 2px 6px #0004,inset 0 1px 1px #ffffff21;
+    }
+    @supports ((backdrop-filter:blur(1px)) or (-webkit-backdrop-filter:blur(1px))) {
+        .ft-lite-dock-glass {
+            -webkit-backdrop-filter: blur(13px) saturate(110%);
+            backdrop-filter: blur(13px) saturate(110%);
+            background:linear-gradient(112deg,#35495873,#18212a8a 60%,#483c336e);
+        }
+    }
+    .ft-lite-dock-glass:focus-within {border-color:#b8cad6a0}
+    @media (prefers-reduced-motion:no-preference) {
+        .ft-lite-dock-glass:not([hidden]) {animation:ft-composer-lift .18s ease-out}
+    }
+    .ft-lite-dock-meta {grid-column:1/-1;display:flex;align-items:center;gap:10px;min-width:0}
+    .ft-floating-composer .ft-lite-dock-hide,.ft-floating-composer .ft-lite-dock-show {
+        display:grid;place-items:center;flex:none;padding:0;min-height:0;
+        border:1px solid #b9d1e140;box-shadow:none;color:#eaf1f4
+    }
+    .ft-floating-composer .ft-lite-dock-hide {
+        width:23px;height:23px;border-radius:50%;margin-left:auto;background:#29364459
+    }
+    .ft-floating-composer.ft-composer-folded {padding-block:0;bottom:max(0px,env(safe-area-inset-bottom))}
+    .ft-floating-composer .ft-lite-dock-show {
+        display:flex;align-items:center;justify-content:center;gap:8px;pointer-events:auto;cursor:pointer;
+        width:min(100%,calc(clamp(172px,18vw,230px) + 4cm));height:var(--ft-folded-composer-height);margin:0;padding:0 16px;
+        border-radius:12px 12px 0 0;border-bottom:0;background:linear-gradient(145deg,#354650ed,#252d37ed);
+        box-shadow:0 -3px 13px #0005,inset 0 1px 0 #f4f7ff11;font:500 11px/1 system-ui,sans-serif;
+    }
+    @supports ((backdrop-filter:blur(1px)) or (-webkit-backdrop-filter:blur(1px))) {
+        .ft-floating-composer .ft-lite-dock-show {background:linear-gradient(130deg,#344752aa,#28323cb5);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px)}
+    }
+    .ft-floating-composer .ft-lite-dock-show i {
+        width:5px;height:5px;margin:3px 0 0 3px;border:solid currentColor;border-width:1px 1px 0 0;transform:rotate(-45deg)
+    }
+    .ft-floating-composer :is(.ft-lite-dock-show,.ft-lite-dock-hide) svg {width:17px;height:17px;fill:none;stroke:currentColor;stroke-linecap:round;stroke-linejoin:round;stroke-width:1.65}
+    .ft-floating-composer :is(.ft-lite-dock-show,.ft-lite-dock-hide):hover {color:#fff;border-color:#c3dfefa0}
+    .ft-floating-composer :is(button,[role=separator]):focus-visible {outline:2px solid #a4d9ff;outline-offset:2px}
+    .ft-lite-dock-scope {
+        flex: 0 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+        font: 500 11px/1.4 system-ui,sans-serif; color:#ffdbbc;
+    }
+    .ft-floating-composer .ft-dock-clear {
+        flex:none; display:grid; place-items:center; width:22px; height:22px; min-height:0;
+        padding:0; margin-left:-6px; border:0; border-radius:50%; color:#dbd8d5; background:transparent;
+    }
+    .ft-floating-composer .ft-dock-clear:hover {background:#d6dce224;color:white}
+    .ft-dock-clear svg {width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.5;stroke-linecap:round}
+    .ft-lite-dock-meta .ft-dock-feedback {
+        flex: 0 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+        display:block; margin:0;padding:0;border:0;color:#d3dfeb;background:none;font-size:11px;
+    }
+    .ft-lite-dock-meta .ft-dock-feedback[data-idle=true] {visibility:hidden}
+    .ft-lite-dock-meta .ft-dock-feedback[data-error=true] {color:#ffbcb1}
+    .ft-floating-composer .ft-dock-field {
+        grid-area:2/1;align-self:stretch; width:100%; height:100%; min-height:0; max-height:none; min-width:0; resize:none;
+        box-sizing:border-box; border:0; margin:0; padding:0; background:transparent; color:#faf9f6;
+        overflow-y:auto; scrollbar-width:thin; font:400 14px/1.45 system-ui,sans-serif; box-shadow:none
+    }
+    .ft-floating-composer textarea.ft-dock-field:focus-visible {outline:none}
+    .ft-floating-composer .ft-dock-field::placeholder {color:#e1e1e1;opacity:.9}
+    .ft-floating-composer .ft-dock-send {
+        grid-area:2/2;align-self:end;position:relative; width:32px; height:32px; min-height:0;padding:0;margin:0;
+        border:0; border-radius:50%; display:grid;place-items:center; overflow:hidden; font-size:0;
+        background:linear-gradient(135deg,#ffe5c7,#ffac71);color:#322419;
+        box-shadow:inset 0 1px 0 #ffffff66,0 2px 7px #0002
+    }
+    .ft-floating-composer .ft-dock-send::before {
+        content:"";width:16px;height:16px;background:currentColor;
+        mask:center / contain no-repeat url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='none' stroke='%23000' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M10 16V4m-6 6 6-6 6 6'/%3E%3C/svg%3E")
+    }
+    .ft-floating-composer .ft-dock-send:disabled {background:#c0b0a0;color:#39322b;opacity:.62}
+    .ft-lite-dock-grip {position:absolute;touch-action:none;user-select:none}
+    .ft-lite-dock-grip[data-resize=height] {left:12%;right:12%;height:11px;top:-4px;cursor:ns-resize}
+    .ft-lite-dock-grip[data-resize=width] {right:-4px;width:11px;top:20%;bottom:20%;cursor:ew-resize}
+    .ft-lite-dock-grip::after {content:'';display:block;position:absolute;border-radius:3px;background:#bdc3c96d}
+    .ft-lite-dock-grip[data-resize=height]::after {width:32px;height:3px;left:calc(50% - 16px);top:4px}
+    .ft-lite-dock-grip[data-resize=width]::after {height:18px;width:2px;top:calc(50% - 9px);right:4px}
+    .ft-lite-dock-grip:is(:focus-visible,:hover)::after {background:#d8e7f2}
+    @media (prefers-reduced-transparency:reduce) {
+        .ft-lite-dock-glass,.ft-floating-composer .ft-lite-dock-show {background:#2c3238;backdrop-filter:none;-webkit-backdrop-filter:none}
+    }
+}
+
+/* Transactions opened on top of an editor retain exclusive use of the page. */
+body:has(dialog:modal:not(.ft-film-book,.ft-deck-dialog,.ft-patch-dialog)) .ft-floating-composer {display:none}
+@keyframes ft-composer-lift {from {translate:0 3px;opacity:.85} to {translate:0 0;opacity:1}}

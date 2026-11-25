@@ -1,0 +1,74 @@
+import {byte, int, Nullable, UUID} from "@opendaw/lib-std"
+import {InstrumentFactories, Sample, Soundfont} from "@opendaw/studio-adapters"
+import {EffectFactories, PresetCategory, PresetSource, type Project} from "@opendaw/studio-core"
+
+export type DragCopyHint = { copy?: boolean }
+export type DragSample = { type: "sample", sample: Sample } & DragCopyHint
+export type DragSoundfont = { type: "soundfont", soundfont: Soundfont } & DragCopyHint
+export type DragFile = { type: "file", files: ReadonlyArray<File> /* Not accessible while dragging! */ } & DragCopyHint
+export type DragDevice = (
+    {
+        type: "midi-effect" | "audio-effect"
+        uuids: ReadonlyArray<UUID.String>
+        instrument: Nullable<UUID.String>
+    } |
+    {
+        type: "midi-effect"
+        uuids: null
+        device: EffectFactories.MidiEffectKeys
+    } |
+    {
+        type: "audio-effect"
+        uuids: null
+        device: EffectFactories.AudioEffectKeys
+    } |
+    {
+        type: "instrument"
+        device: InstrumentFactories.Keys
+    } |
+    {
+        type: "instrument"
+        device: null
+        uuid: UUID.String
+        effects: ReadonlyArray<UUID.String>
+    } |
+    {
+        type: "playfield-slot"
+        index: byte
+        uuid: string
+    }) & DragCopyHint
+export type DragChannelStrip = { type: "channelstrip", uuid: string, start_index: int } & DragCopyHint
+// One timeline track lane dragged to reorder it among the lanes sharing its device group (same unit, same
+// track type, same device).
+export type DragTrack = { type: "track", uuid: UUID.String } & DragCopyHint
+// One AudioComposite entry dragged to reorder it among its siblings. `composite` scopes the drop so an entry
+// only reorders within its OWN composite; `index` is the dragged entry's current order.
+export type DragCompositeEntry = {
+    type: "composite-entry"
+    uuid: UUID.String
+    index: int
+    composite: UUID.String
+} & DragCopyHint
+export type DragPreset = {
+    type: "preset"
+    category: PresetCategory
+    source: PresetSource
+    uuid: UUID.String
+    device: Nullable<InstrumentFactories.Keys>
+} & DragCopyHint
+
+// The dragged modulators, reordering them in the modulation panel's list: the whole selection when the one
+// under the pointer belongs to it, else that one alone. `index` is the dragged one's own place, which tells
+// a drop target which side of itself to mark.
+export type DragModulator = {
+    type: "modulator"
+    uuids: ReadonlyArray<UUID.String>
+    index: int
+} & DragCopyHint
+
+export type DragProjectAsset = {type: "project-asset", project: Project, id: string, parts?: readonly string[]} & DragCopyHint
+
+export type AnyDragData =
+    | DragProjectAsset |
+    DragSample | DragFile | DragDevice | DragChannelStrip | DragTrack | DragSoundfont | DragPreset
+    | DragCompositeEntry | DragModulator | ({type: "track-folder", uuid: string} & DragCopyHint)

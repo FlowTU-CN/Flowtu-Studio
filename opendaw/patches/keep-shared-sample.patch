@@ -1,0 +1,93 @@
+diff --git a/dist/project/Project.d.ts b/dist/project/Project.d.ts
+--- a/dist/project/Project.d.ts
++++ b/dist/project/Project.d.ts
+@@ -91,5 +91,6 @@
+     invalid(): boolean;
+     lastRegionAction(): ppqn;
+     trackUserCreatedSample(uuid: UUID.Bytes): void;
++    keepSampleInStorage(uuid: UUID.Bytes): void;
+     terminate(): void;
+ }
+diff --git a/dist/project/Project.js b/dist/project/Project.js
+--- a/dist/project/Project.js
++++ b/dist/project/Project.js
+@@ -409,6 +409,9 @@
+     trackUserCreatedSample(uuid) {
+         this.#userCreatedSamples.add(uuid);
+     }
++    keepSampleInStorage(uuid) {
++        this.#userCreatedSamples.removeByKeyIfExist(uuid);
++    }
+     terminate() {
+         this.#terminated = true;
+         this.#sampleRegistrations.forEach(({ terminable }) => terminable.terminate());
+diff --git a/dist/project/ProjectBundle.js b/dist/project/ProjectBundle.js
+--- a/dist/project/ProjectBundle.js
++++ b/dist/project/ProjectBundle.js
+@@ -11,7 +11,7 @@
+ import { WclapStorage } from "../wclap/WclapStorage";
+ export var ProjectBundle;
+ (function (ProjectBundle) {
+-    ProjectBundle.encode = async ({ uuid, project, meta, cover }, progress) => {
++    ProjectBundle.encode = async ({ uuid, project, meta, cover }, progress, getExtraResources = () => []) => {
+         const { status, value: JSZip, error } = await ExternalLib.JSZip();
+         if (status === "rejected") {
+             console.warn(error);
+@@ -26,11 +26,20 @@
+         cover.ifSome(buffer => zip.file(ProjectPaths.ProjectCoverFile, buffer, { binary: true }));
+         const samples = asDefined(zip.folder("samples"), "Could not create folder samples");
+         const soundfonts = asDefined(zip.folder("soundfonts"), "Could not create folder soundfonts");
+-        const audioFileBoxes = project.boxGraph.boxes().filter(box => box instanceof AudioFileBox);
+-        const soundfontFileBoxes = project.boxGraph.boxes().filter(box => box instanceof SoundfontFileBox);
++        // A dormant instrument preset may be the last owner of a sample or soundfont.
++        // Archive the additional resources without installing those devices into the saved project.
++        const resources = new Map();
++        for (const box of [...project.boxGraph.boxes(), ...getExtraResources()]) {
++            if (box instanceof AudioFileBox || box instanceof SoundfontFileBox || box instanceof WclapDeviceBox || box instanceof WclapInstrumentBox) {
++                resources.set(UUID.toString(box.address.uuid), box);
++            }
++        }
++        const resourceBoxes = Array.from(resources.values());
++        const audioFileBoxes = resourceBoxes.filter(box => box instanceof AudioFileBox);
++        const soundfontFileBoxes = resourceBoxes.filter(box => box instanceof SoundfontFileBox);
+         const wclaps = asDefined(zip.folder(WclapStorage.Folder), "Could not create folder wclap");
+         // locally imported WebCLAP bundles (`opfs:` urls) travel with the project, public urls are re-fetched
+-        const wclapIds = Array.from(new Set(project.boxGraph.boxes()
++        const wclapIds = Array.from(new Set(resourceBoxes
+             .filter(box => box instanceof WclapDeviceBox || box instanceof WclapInstrumentBox)
+             .map(box => box.url.getValue())
+             .filter(WclapStorage.isLocal)
+@@ -143,6 +152,9 @@
+             zip.file("peaks.bin", await Workers.Opfs.read(`${path}/peaks.bin`), { binary: true });
+             zip.file("meta.json", await Workers.Opfs.read(`${path}/meta.json`));
+         };
++        if (loader.state.type === "error") {
++            throw new Error(loader.state.reason);
++        }
+         if (loader.state.type === "loaded") {
+             return exec();
+         }
+@@ -167,6 +179,9 @@
+             zip.file("soundfont.sf2", await Workers.Opfs.read(`${path}/soundfont.sf2`), { binary: true });
+             zip.file("meta.json", await Workers.Opfs.read(`${path}/meta.json`));
+         };
++        if (loader.state.type === "error") {
++            throw new Error(loader.state.reason);
++        }
+         if (loader.state.type === "loaded") {
+             return exec();
+         }
+diff --git a/dist/project/ProjectBundle.d.ts b/dist/project/ProjectBundle.d.ts
+--- a/dist/project/ProjectBundle.d.ts
++++ b/dist/project/ProjectBundle.d.ts
+@@ -1,8 +1,9 @@
++import type { Box } from "@opendaw/lib-box";
+ import { Progress, UUID } from "@opendaw/lib-std";
+ import { ProjectEnv } from "./ProjectEnv";
+ import { ProjectProfile } from "./ProjectProfile";
+ export declare namespace ProjectBundle {
+-    const encode: ({ uuid, project, meta, cover }: ProjectProfile, progress: Progress.Handler) => Promise<ArrayBuffer>;
++    const encode: ({ uuid, project, meta, cover }: ProjectProfile, progress: Progress.Handler, getExtraResources?: () => ReadonlyArray<Box>) => Promise<ArrayBuffer>;
+     const decode: (env: ProjectEnv, arrayBuffer: ArrayBuffer, openProfileUUID?: UUID.Bytes) => Promise<ProjectProfile>;
+ }
+ //# sourceMappingURL=ProjectBundle.d.ts.map

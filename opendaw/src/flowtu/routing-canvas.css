@@ -1,0 +1,68 @@
+dialog.ft-patch-dialog { transform:none; translate:none; position:fixed; box-sizing:border-box; width:min(1100px,96vw); height:min(740px,88dvh); max-width:96vw; max-height:90dvh; padding:0; margin:auto; inset:0; border:1px solid #405768; border-radius:12px; color-scheme:dark; overflow:hidden }
+.ft-patch-dialog::backdrop { background:#03070bb0 }
+.ft-patch { --patch-bg:var(--ft-rack-bg,#101820); --patch-surface:var(--ft-rack-surface,#1e2934); --patch-line:var(--ft-rack-line,#435565); --patch-hot:var(--ft-rack-accent,#ffad76); box-sizing:border-box; display:grid; grid-template-rows:auto minmax(0,1fr) auto; width:100%; height:100%; min-height:0; color:#e2eaf1; background:var(--patch-bg); font:13px/1.35 system-ui,sans-serif; color-scheme:dark; text-align:left }
+.ft-patch :not(.ft-routing-device *) { box-sizing:border-box }
+.ft-patch > header,.ft-patch > footer { display:flex; flex-wrap:wrap; align-items:center; gap:8px; padding:10px 15px; background:var(--patch-surface); border-bottom:1px solid var(--patch-line) }
+.ft-patch > header strong { font-size:15px; margin-right:9px }
+.ft-patch > header span { flex:1 }
+.ft-patch :is(button,input,select):not(.ft-routing-device *) { color:inherit; font:inherit; padding:4px 8px; border:1px solid var(--patch-line); border-radius:5px; background:var(--patch-bg) }
+.ft-patch button:not(.ft-routing-device *) { cursor:pointer }
+.ft-patch button:not(.ft-routing-device *):hover { border-color:var(--patch-hot) }
+.ft-patch .ft-patch-scroll { min-height:0; overflow:auto; overscroll-behavior:contain; background-color:var(--patch-bg); background-image:radial-gradient(#8b9cae33 .8px,transparent .9px); background-size:15px 15px }
+.ft-patch .ft-patch-world { position:relative; min-width:100%; min-height:100%; isolation:isolate; touch-action:none }
+.ft-patch .ft-patch-wires { position:absolute; left:0; top:0; z-index:0; overflow:visible; pointer-events:none }
+.ft-patch .ft-patch-wires path { fill:none; stroke-width:2.5px; stroke-linecap:round; stroke:#78c5ee }
+.ft-patch .ft-patch-wires path.send { stroke:#efad72; stroke-dasharray:7 2 }
+.ft-patch .ft-patch-wires path.pending { stroke-dasharray:4 5 }
+.ft-patch .ft-patch-wires path.selected { stroke-width:4px; filter:drop-shadow(0 0 3px #e8f3ff66) }
+.ft-patch .ft-patch-wires path.hit { pointer-events:stroke; stroke:transparent; stroke-width:14px; cursor:pointer }
+.ft-patch .ft-patch-node { position:absolute; width:208px; min-height:75px; padding:8px; border:1px solid var(--patch-line); background:var(--patch-surface); border-radius:8px; box-shadow:0 4px 14px #0005; z-index:1 }
+.ft-patch .ft-patch-node > h3 { margin:-8px -8px 8px; padding:7px 10px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; border-bottom:1px solid var(--patch-line); border-left:3px solid #78c5ee; border-radius:7px 0 0; font:600 13px/1.35 system-ui; cursor:move; user-select:none; touch-action:none }
+.ft-patch .ft-patch-node[data-kind=bus] > h3 { border-left-color:var(--patch-hot) }
+.ft-patch .ft-patch-node[data-kind=master] > h3 { border-left-color:#c4a5ea }
+.ft-patch .ft-patch-ports { display:flex; align-items:center; gap:6px; justify-content:flex-end }
+.ft-patch [data-port] { font-size:11px; color:#9bd6f8; cursor:crosshair; touch-action:none }
+.ft-patch [data-port=send] { color:#efad72 }
+.ft-patch [data-port=in] { margin-right:auto }
+.ft-patch [data-port].armed { border-color:var(--patch-hot); box-shadow:0 0 5px var(--patch-hot) }
+.ft-patch > footer { min-height:42px; border-top:1px solid var(--patch-line); border-bottom:0; justify-content:space-between; color:#c4d3df }
+.ft-patch .ft-patch-inspector { display:flex; align-items:center; gap:6px }
+.ft-patch .ft-patch-inspector input { width:64px }
+.ft-patch [hidden] { display:none!important }
+@media(max-width:650px) {.ft-patch > header {gap:4px;padding:6px}.ft-patch > header strong{flex-basis:100%}.ft-patch > header select{max-width:135px}}
+.ft-patch > header .ft-palette {gap:5px}
+.ft-patch > header .ft-palette span {flex:none}
+.ft-patch .ft-patch-zoom {display:inline-flex;border:1px solid var(--patch-line);border-radius:5px;overflow:hidden}
+.ft-patch .ft-patch-zoom button {border:0;border-radius:0;min-width:23px;padding:4px 6px}
+.ft-patch .ft-patch-zoom [data-action=zoom] {min-width:42px;font-variant-numeric:tabular-nums}
+.ft-patch .ft-patch-zoom button:hover {background:var(--patch-line)}
+.ft-patch-frame {position:relative;overflow:clip}
+.ft-patch .ft-patch-world {position:absolute;inset:0 auto auto 0;min-width:0;min-height:0;transform-origin:0 0}
+.ft-patch .ft-patch-wires {width:100%;height:100%}
+.ft-patch .ft-patch-node[data-kind] > h3 {border-left-color:var(--ft-node-color);display:flex;align-items:center;gap:6px}
+.ft-patch-node > h3 span {overflow:hidden;text-overflow:ellipsis;flex:1}
+.ft-patch .ft-patch-node [data-port=in] {color:var(--ft-node-color);border-color:color-mix(in srgb,var(--ft-node-color) 55%,var(--patch-line))}
+
+.ft-patch .ft-patch-wires path.hovered {stroke-width:4px;filter:brightness(1.2)}
+
+.ft-patch .ft-patch-connections {display:flex;align-items:center;gap:6px;margin-left:auto;min-width:0}
+.ft-patch .ft-patch-connections select {min-width:0;max-width:min(245px,32vw);text-overflow:ellipsis}
+.ft-patch button[data-action=remove-route]:not(:disabled),.ft-patch button[data-delete-node]:hover {color:#ffb4a4;border-color:#b57564}
+.ft-patch button[data-action=remove-route]:disabled {opacity:.5;cursor:default}
+.ft-patch button[data-delete-node] {flex:none;line-height:1;padding:1px 5px;font-size:14px}
+.ft-patch .ft-patch-node[data-selected] {outline:2px solid var(--ft-node-color);outline-offset:1px}
+
+.ft-patch .ft-patch-node.with-devices {width:max-content;min-width:208px}
+.ft-routing-device {margin-top:8px;width:max-content;border-radius:4px;background:var(--ft-rack-bg);overflow:hidden}
+.ft-routing-device > [data-ft-device] {height:216px;min-height:0}
+
+.ft-patch > header:has(.ft-patch-titlebar) {display:block;padding:0}
+.ft-patch-titlebar,.ft-patch-tools {display:flex;align-items:center;gap:6px;padding:6px 12px}
+.ft-patch-titlebar {padding-block:3px;background:var(--patch-bg);border-bottom:1px solid var(--patch-line)}
+.ft-patch-title {display:flex;align-items:center;gap:8px;align-self:stretch;flex:1;min-height:30px}
+.ft-patch-dialog .ft-patch-title {touch-action:none;user-select:none;cursor:grab}
+.ft-patch-dialog .ft-patch-title::before {content:'';width:8px;height:13px;background:radial-gradient(circle,#8d9da9 1px,transparent 1.2px) 0 0 / 4px 4px}
+.ft-patch-dialog .ft-patch-title.dragging {cursor:grabbing}
+.ft-patch-title:focus-visible {outline:1px solid var(--patch-hot);outline-offset:0}
+.ft-patch-tools {flex-wrap:wrap}
+.ft-patch-dialog::backdrop {background:#03070b50}

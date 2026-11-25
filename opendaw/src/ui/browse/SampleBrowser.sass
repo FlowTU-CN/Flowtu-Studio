@@ -1,0 +1,12 @@
+@use "./ResourceBrowser" as *
+
+// Bpm and Sec are fixed rather than auto: an auto track is measured from the rows currently in the grid, so
+// collapsing a folder removes its rows and the columns would jump every time a folder is toggled.
+component
+  @include resource-browser("1fr 3.5em 3em minmax(4px, auto)", true)
+  > div.footer > a.stored
+    margin-right: auto
+    color: inherit
+    text-decoration: none
+    cursor: pointer
+

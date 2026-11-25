@@ -1,0 +1,41 @@
+component
+  display: flex
+  flex-direction: column
+  padding: 0.5em 0.25em
+  min-width: 15em
+  position: relative
+  border-radius: 3px
+
+  // With no branches the whole body is one drop zone (see installAppendTarget gated to empty): stretch to the
+  // full editor-row height (the dry/wet knobs are taller) and let the empty scroll fill it, so the ENTIRE area
+  // accepts a drop, not just the top.
+  &.empty
+    align-self: stretch
+
+  // the append line: a drop anywhere below the rows (or on an empty list) inserts a row here
+  > .append-line
+    height: 2px
+    margin: 0 0 -2px 0
+    background-color: var(--color-blue)
+    visibility: hidden
+
+  &.insert-append > .append-line
+    visibility: visible
+
+  .scroll
+    display: flex
+    flex-direction: column
+    gap: 0.125em
+    max-height: 9rem
+    overflow: hidden auto
+    width: max-content
+    min-width: 100%
+    padding-right: 8px // clear the 8px overlay scrollbar
+    mask-image: linear-gradient(to bottom, black calc(100% - 1.5em * var(--fade-bottom, 0)), transparent)
+    -webkit-mask-image: linear-gradient(to bottom, black calc(100% - 1.5em * var(--fade-bottom, 0)), transparent)
+
+  // The footer (Add Effect button) is the only non-scroll child; center it below the list.
+  > :not(.scroll):not(.append-line)
+    flex: 0 0 auto
+    align-self: center
+    margin-top: calc(0.25em + 2px)

@@ -1,0 +1,25 @@
+.ft-crossfade-zones {position:absolute;inset:0;overflow:hidden;pointer-events:none;z-index:4}
+.ft-crossfade-zone {position:absolute;display:block;padding:0;margin:0;min-width:0;border-radius:0;border:0;border-inline:1px solid #97bbd8aa;background:#41576e5c;box-sizing:border-box;overflow:hidden;pointer-events:none}
+.ft-crossfade-zones[data-interactive=true] .ft-crossfade-zone {pointer-events:auto;cursor:pointer}
+.ft-crossfade-zone:hover, .ft-crossfade-zone:focus-visible {background:#68849f77;outline:1px solid #b0d1ed;outline-offset:-1px}
+.ft-crossfade-zone svg, .ft-crossfade-editor svg {display:block;width:100%;height:100%;pointer-events:none}
+.ft-crossfade-zone polyline, .ft-crossfade-editor polyline {fill:none;stroke-width:1.6px;vector-effect:non-scaling-stroke}
+.ft-crossfade-zones .incoming, .ft-crossfade-editor .incoming {stroke:#86cafa}
+.ft-crossfade-zones .outgoing, .ft-crossfade-editor .outgoing {stroke:#ffb780}
+.ft-crossfade-editor {width:290px;max-width:90vw;margin:auto;padding:16px;border:1px solid #54687b;background:#15212d;color:#e0e9f1;border-radius:10px;font:14px/1.4 system-ui;box-shadow:0 16px 60px #0007}
+.ft-crossfade-editor::backdrop {background:#03091350}
+.ft-crossfade-editor form {display:grid;gap:12px}
+.ft-crossfade-editor header,.ft-crossfade-editor label,.ft-crossfade-editor footer {display:flex;align-items:center;justify-content:space-between;gap:12px}
+.ft-crossfade-editor output {color:#a8bbcb;font-variant-numeric:tabular-nums}
+.ft-crossfade-editor .plot {height:92px;border:1px solid #435466;background:linear-gradient(to right,transparent 49.75%,#475667 50%,transparent 50.25%),#101923}
+.ft-crossfade-editor label {color:#ffba86}
+.ft-crossfade-editor label + label {color:#9ed5fc}
+.ft-crossfade-editor input {width:68%;accent-color:currentColor;color:inherit}
+.ft-crossfade-editor button {background:#26394c;color:#deebf7;border:1px solid #49647c;border-radius:5px;padding:4px 11px;cursor:pointer}
+
+.ft-crossfade-editor .plot {position:relative;touch-action:none}
+.ft-crossfade-handle {position:absolute;transform:translate(-50%,-50%);width:18px;height:18px;display:grid;place-items:center;cursor:ns-resize}
+.ft-crossfade-handle::after {content:"";width:8px;height:8px;border:1px solid #122131;border-radius:50%;background:#ffb780}
+.ft-crossfade-handle.incoming::after {background:#86cafa}
+
+.ft-crossfade-editor button[aria-pressed=true] {border-color:#8abfe4;color:#cfeaff;background:#28485d}

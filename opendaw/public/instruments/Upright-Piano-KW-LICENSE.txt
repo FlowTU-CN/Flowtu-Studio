@@ -1,0 +1,18 @@
+FreePats — Upright Piano KW
+https://freepats.zenvoid.org/Piano/acoustic-grand-piano.html
+
+A Kawai upright recorded by Gonzalo and Roberto in January 2017.
+Sample editing and processing by Roberto for the FreePats project.
+License: Creative Commons CC0 1.0 Universal Public Domain Dedication
+https://creativecommons.org/publicdomain/zero/1.0/
+
+The unmodified SF2 distributed here was retrieved from the openDAW
+instrument catalogue (ID d9f51577-2096-4671-9067-27ca2e12b329).
+https://assets.opendaw.studio/soundfonts/d9f51577-2096-4671-9067-27ca2e12b329
+
+SHA-256: d9f5157720963671906727ca2e12b3293fd822c831bb0de477dd1c5f3ad37108
+
+To restore the standalone data file when working from the source-only
+archive, run this command from the repository root before starting Studio:
+
+curl -fL https://assets.opendaw.studio/soundfonts/d9f51577-2096-4671-9067-27ca2e12b329 -o opendaw/public/instruments/upright-piano-kw.sf2

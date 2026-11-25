@@ -1,0 +1,14 @@
+.ft-note-editor {
+    inset: 0; transform: none; margin: auto; height: fit-content; padding: 15px; width: min(360px, 90vw);
+    color: #e4edf5; background: #172530; border: 1px solid #455969;
+    border-radius: 9px; font: 13px/1.4 system-ui; color-scheme: dark;
+}
+.ft-note-editor::backdrop { background: #050a1080; }
+.ft-note-editor form { display: grid; gap: 12px; }
+.ft-note-editor header, .ft-note-editor footer { display: flex; gap: 7px; align-items: center; }
+.ft-note-editor time { margin-left: auto; font: 11px ui-monospace, monospace; color: #adc5d5; }
+.ft-note-editor textarea { user-select: text; padding: 8px; resize: vertical; background: #0f1a23; color: inherit; border: 1px solid #4a6071; border-radius: 5px; font: inherit; }
+.ft-note-editor footer { justify-content: end; }
+.ft-note-editor button { font: inherit; color: inherit; background: #233644; border: 1px solid #425866; border-radius: 5px; padding: 3px 10px; cursor: pointer; }
+.ft-note-editor [data-delete] { margin-right: auto; }
+.ft-note-editor button[type=submit] { background: #255071; }

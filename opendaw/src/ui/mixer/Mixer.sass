@@ -1,0 +1,101 @@
+@use "@/colors"
+
+component
+  flex: 1 0 0
+  width: 100%
+  display: flex
+  flex-direction: column
+  row-gap: 1px
+
+  > div.channel-strips-wrapper
+    display: flex
+    flex: 1 0 0
+    width: 100%
+    overflow: hidden
+    @include colors.panel-background
+
+    > div.channel-strips
+      flex: 1 0 0
+      width: max-content
+      padding: 0.5em
+      display: grid
+      grid-template-rows: auto auto auto auto 40px 1fr auto
+      grid-auto-flow: column dense
+      justify-content: start
+      row-gap: 4px
+      column-gap: 8px
+
+      > div.headers
+        display: grid
+        grid-template-rows: subgrid
+        grid-row: span 7
+        padding: 0 0.5em 0.5em 1em
+        border-radius: 0.125em
+        background-color: rgba(white, 0.01)
+
+        > h5
+          font-size: 0.5em
+          display: flex
+          margin-top: 0.375em
+          justify-content: right
+          color: rgba(white, 0.4)
+          pointer-events: none
+
+  &.compact-mixer
+    min-height: 0
+    background: var(--color-panel-background)
+
+    > .channel-strips-wrapper
+      min-height: 0
+
+      > .channel-strips
+        grid-template-rows: minmax(0, 1fr)
+        grid-auto-columns: 102px
+        gap: 4px
+        padding: 1px 4px 2px
+
+        > .headers
+          display: none
+
+        > .compact
+          grid-row: 1
+          grid-template: 16px minmax(0, 1fr) / minmax(0, 1fr) 18px
+          justify-content: stretch
+          min-width: 0
+          max-width: none
+          height: auto
+          min-height: 0
+          padding: 1px 8px 2px
+          gap: 2px
+
+          > .channel-label
+            grid-column: span 2
+            margin: 0
+            height: auto
+            font: 600 11px/16px system-ui, sans-serif
+            color: var(--color-cream)
+
+          > .volume
+            grid-template-rows: 12px minmax(0, 1fr)
+            gap: 1px 4px
+
+            > .value-display
+              font: 10px/12px ui-monospace, monospace
+
+            [data-class="vertical-slider"]
+              min-height: 0
+              font-size: 10px
+
+          > .mute-solo
+            display: flex
+            flex-direction: column
+            justify-content: end
+            align-items: center
+            gap: 4px
+            font-size: 10px
+
+            .mute, .solo
+              margin: 0
+
+          &.output
+            border-inline-start: 2px solid var(--color-blue)

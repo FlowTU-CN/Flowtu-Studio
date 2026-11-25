@@ -1,0 +1,7 @@
+:is(.ft-score,.ft-film-book) .ft-cue-title-edit{display:block;max-width:100%;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:0;border:0;border-radius:2px;background:transparent;color:inherit;font:600 12px/1.45 system-ui;text-align:start;cursor:text}
+:is(.ft-score,.ft-film-book) .ft-cue-title-edit:hover{text-decoration:underline;text-underline-offset:3px}
+:is(.ft-score,.ft-film-book) .ft-cue-title-input{box-sizing:border-box;width:100%;min-width:0;border:1px solid #80abc9;border-radius:3px;padding:0 3px;background:#0e1923;color:#eef4fa;font:600 12px/1.45 system-ui;user-select:text}
+:is(.ft-score,.ft-film-book) :is(.ft-cue-title-edit,.ft-cue-title-input)[hidden]{display:none}
+.ft-cue-name-menu:popover-open{position:fixed;inset:auto;min-width:108px;margin:0;border:1px solid #40566a;border-radius:5px;padding:3px;background:#182735;color:#e0eaf2;box-shadow:0 5px 16px #0005}
+.ft-cue-name-menu button[role=menuitem]{display:block;width:100%;padding:5px 10px;border:0;border-radius:3px;background:transparent;color:inherit;font:13px/1.4 system-ui;text-align:start}
+.ft-cue-name-menu button:is(:hover,:focus-visible){background:#30485e}

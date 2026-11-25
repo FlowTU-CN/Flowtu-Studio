@@ -1,0 +1,35 @@
+component
+  display: grid
+  grid-auto-rows: 1fr 0.5em
+  row-gap: 0.25em
+
+  > header
+    display: flex
+    flex-direction: row
+    align-items: center
+    column-gap: 0.3em
+    color: var(--color-dark)
+
+    > div.channel-mix
+      display: flex
+      flex-direction: row
+      font-size: 0.875em
+      column-gap: 0.375em
+      color: var(--color-bright)
+
+    > div.channel-isolation
+      display: flex
+      flex-direction: row
+      font-size: 0.75em
+      column-gap: 0.5em
+
+      // The output has no solo (master), but the control stays for layout so the mute keeps its position.
+      &.solo-hidden > :last-child
+        visibility: hidden
+
+    > div.channel-capture
+      width: 2em
+      display: flex
+      flex-direction: row
+      font-size: 0.75em
+      column-gap: 0.5em

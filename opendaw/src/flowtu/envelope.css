@@ -1,0 +1,7 @@
+.flowtu-envelope-tools{display:inline-flex;align-items:center;gap:5px}
+.flowtu-envelope-tools button[aria-pressed=true]{border-color:#6cbaff;background:#17364f;color:#bde1ff}
+.flowtu-envelope-tools .envelope-read{min-width:58px}
+.flowtu-envelope-tools button:disabled{opacity:.35;cursor:default}
+.flowtu-envelope-status{position:fixed;left:50%;bottom:30px;transform:translateX(-50%);max-width:80vw;z-index:150;padding:9px 16px;border:1px solid #3f647e;border-radius:10px;background:#111f30;color:#d2e8fa;font:13px/1.5 system-ui;pointer-events:none;box-shadow:0 6px 24px #0006}
+.flowtu-envelope-status[hidden],.flowtu-envelope-tooltip[hidden]{display:none}
+.flowtu-envelope-tooltip{position:fixed;z-index:200;pointer-events:none;padding:5px 8px;background:#08253c;border:1px solid #83c7ff;border-radius:5px;color:#fff;font:12px/1.4 system-ui;font-variant-numeric:tabular-nums}

@@ -1,0 +1,52 @@
+component
+  display: flex
+  align-items: center
+  column-gap: 2px
+
+  *
+    stroke: currentColor
+    stroke-width: 2px
+    stroke-opacity: 0.1
+
+  .play-toggle
+    display: grid
+    place-items: center
+    width: 31px
+    height: 25px
+    padding: 0
+    margin: 0 2px
+    border: 1px solid #435a6b
+    border-radius: 6px
+    background: #223647
+    color: #d5eafa
+    cursor: pointer
+
+    svg
+      width: 16px
+      height: 16px
+      fill: currentColor
+      stroke: none
+
+    .pause
+      display: none
+    &[aria-pressed=true]
+      color: #d5f2ff
+      background: #254e66
+      border-color: #5b8eaa
+      .pause
+        display: block
+      .play
+        display: none
+
+    &:hover
+      background: #30516a
+    &:focus-visible
+      outline: 2px solid #9edafa
+      outline-offset: 1px
+
+  .no-project &
+    opacity: 0.6
+    pointer-events: none
+
+    *
+      pointer-events: none

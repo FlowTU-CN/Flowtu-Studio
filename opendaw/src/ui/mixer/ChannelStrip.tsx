@@ -1,0 +1,228 @@
+import {deleteUnitWithMedia} from "@/flowtu/track-delete"
+import {midiTrackName, setMidiTrackName, watchMidiTrackName} from "@/flowtu/track-name"
+import {memberSwitch, resetSwitches} from "@/flowtu/folder-tree"
+import css from "./ChannelStrip.sass?inline"
+import {EmptyExec, Lifecycle, Terminable, UUID} from "@opendaw/lib-std"
+import {AudioUnitBoxAdapter, ColorCodes} from "@opendaw/studio-adapters"
+import {AudioUnitType, Colors, IconSymbol} from "@opendaw/studio-enums"
+import {createElement, DomElement, Frag, Inject} from "@opendaw/lib-jsx"
+import {VolumeSlider} from "@/ui/components/VolumeSlider.tsx"
+import {PeakMeter} from "@/ui/components/PeakMeter.tsx"
+import {Checkbox} from "@/ui/components/Checkbox.tsx"
+import {Icon, IconCartridge} from "@/ui/components/Icon.tsx"
+import {Knob} from "@/ui/components/Knob.tsx"
+import {RelativeUnitValueDragging} from "@/ui/wrapper/RelativeUnitValueDragging.tsx"
+import {SnapCenter} from "@/ui/configs"
+import {StudioService} from "@/service/StudioService"
+import {AutoEqAction} from "@/ui/mixer/AutoEqAction.tsx"
+import {ChannelStripView, ContextMenu, MenuItem} from "@opendaw/studio-core"
+import {AuxSendGroup} from "@/ui/mixer/AuxSendGroup.tsx"
+import {DblClckTextInput} from "@/ui/wrapper/DblClckTextInput.tsx"
+import {ChannelOutputSelector} from "@/ui/mixer/ChannelOutputSelector.tsx"
+import {gainToDb} from "@opendaw/lib-dsp"
+import {DebugMenus} from "@/ui/menu/debug.ts"
+import {AutomationControl} from "../components/AutomationControl"
+import {DragAndDrop} from "../DragAndDrop"
+import {Events, Html} from "@opendaw/lib-dom"
+import {TextTooltip} from "@/ui/surface/TextTooltip"
+import {AudioOutputSelector} from "./AudioOutputSelector"
+
+const className = Html.adoptStyleSheet(css, "ChannelStrip")
+
+type Construct = {
+    lifecycle: Lifecycle
+    service: StudioService
+    adapter: AudioUnitBoxAdapter
+    compact: boolean
+    showLabel?: boolean
+}
+
+export const ChannelStrip = ({lifecycle, service, adapter, compact, showLabel}: Construct) => {
+    const {mute, panning, solo, volume} = adapter.namedParameter
+    const {project} = service
+    const {editing, mixer, rootBoxAdapter, liveStreamReceiver, midiLearning} = project
+    const isBus = adapter.type === AudioUnitType.Bus
+    const isAux = adapter.type === AudioUnitType.Aux
+    const isOutput = adapter.type === AudioUnitType.Output
+    const inputLabel = lifecycle.own(Inject.value("No Input"))
+    const isMidiUnit = () => adapter.input.adapter().unwrapOrNull()?.accepts === "midi"
+    const mixerName = () => midiTrackName(adapter.box) ?? adapter.input.label.unwrapOrElse("No Input")
+    const updateMixerName = () => {inputLabel.value = mixerName()}
+    const peaks = new Float32Array(2)
+    const volumeLabel: HTMLDivElement = <div className="value-display"/>
+    const maxPeakLabel: HTMLDivElement = <div className="value-display peak valid">-∞</div>
+    const updateVolumeLabel = () => volumeLabel.textContent = volume.stringMapping.x(volume.getControlledValue()).value
+    updateVolumeLabel()
+    let permanentPeak = Number.NEGATIVE_INFINITY
+    lifecycle.own(liveStreamReceiver.subscribeFloats(adapter.address, array => {
+        peaks[0] = gainToDb(array[0])
+        peaks[1] = gainToDb(array[1])
+        const maxPeak = Math.max(...peaks)
+        if (permanentPeak <= maxPeak) {
+            permanentPeak = maxPeak
+            maxPeakLabel.textContent = Number.isFinite(permanentPeak) && permanentPeak > -96 ? permanentPeak.toFixed(1) : "-∞"
+            maxPeakLabel.classList.toggle("valid", maxPeak <= 0.0)
+            maxPeakLabel.classList.toggle("clipping", maxPeak > 0.0)
+        }
+    }))
+    const tracks = adapter.tracks
+    const volumeControl = (
+        <AutomationControl lifecycle={lifecycle} editing={editing} midiLearning={midiLearning}
+                           tracks={tracks} parameter={volume}>
+            <VolumeSlider lifecycle={lifecycle} editing={editing} parameter={volume}/>
+        </AutomationControl>
+    )
+    const panningControl = (
+        <AutomationControl lifecycle={lifecycle} editing={editing} midiLearning={midiLearning}
+                           tracks={tracks} parameter={panning}>
+            <RelativeUnitValueDragging lifecycle={lifecycle} editing={editing} parameter={panning}
+                                       options={SnapCenter}>
+                <Knob lifecycle={lifecycle} value={panning} anchor={0.5}/>
+            </RelativeUnitValueDragging>
+        </AutomationControl>
+    )
+    const muteModel = memberSwitch(project, adapter, "mute")
+    const soloModel = memberSwitch(project, adapter, "solo")
+    const muteControl = (
+        <AutomationControl lifecycle={lifecycle} editing={editing} midiLearning={midiLearning}
+                           tracks={tracks} parameter={mute}>
+            <Checkbox lifecycle={lifecycle}
+                      model={muteModel}
+                      className="mute"
+                      appearance={{color: Colors.shadow, activeColor: Colors.orange, framed: true}}>
+                <Icon symbol={IconSymbol.Mute}/>
+            </Checkbox>
+        </AutomationControl>
+    )
+    const soloControl = (
+        <AutomationControl lifecycle={lifecycle} editing={editing} midiLearning={midiLearning}
+                           tracks={tracks} parameter={solo}>
+            <Checkbox lifecycle={lifecycle}
+                      model={soloModel}
+                      className="solo"
+                      appearance={{color: Colors.shadow, activeColor: Colors.yellow, framed: true}}>
+                <Icon symbol={IconSymbol.Solo}/>
+            </Checkbox>
+        </AutomationControl>
+    )
+    const lockIcon: HTMLElement = <Icon symbol={IconSymbol.Lock} className="lock-icon"/>
+    lockIcon.style.display = adapter.isInstrument && project.audioUnitFreeze.isFrozen(adapter) ? "" : "none"
+    const iconElement: HTMLElement = <div className="icon-container"
+                                          style={{cursor: adapter.isOutput ? "auto" : "grab"}}>
+        <IconCartridge lifecycle={lifecycle} symbol={adapter.input.iconValue}
+                       style={{
+                           fontSize: "2em",
+                           alignSelf: "center",
+                           justifySelf: "center",
+                           marginTop: "0.5em",
+                           marginBottom: "0.5em",
+                           color: ColorCodes.forAudioType(adapter.type).toString()
+                       }}/>
+        {adapter.isInstrument && lockIcon}
+    </div>
+    const classList = Html.buildClassList(className,
+        isAux && "aux", isBus && "bus", isOutput && "output", compact && "compact")
+    const peakMeter: DomElement = (<PeakMeter lifecycle={lifecycle} peaks={peaks}/>)
+    const element: HTMLElement = (
+        <div className={classList} data-drag>
+            {showLabel && <h5 className="channel-label">{inputLabel}</h5>}
+            {!compact && (
+                <Frag>
+                    {iconElement}
+                    <DblClckTextInput resolversFactory={
+                        () => {
+                            const resolvers = Promise.withResolvers<string>()
+                            resolvers.promise.then((value: string) => editing.modify(() => {
+                                if (isMidiUnit()) setMidiTrackName(adapter.box, value)
+                                else adapter.input.label = value
+                            }), EmptyExec)
+                            return resolvers
+                        }
+                    } provider={() => ({value: mixerName(), unit: ""})}>
+                        <h5 className="input">{inputLabel}</h5>
+                    </DblClckTextInput>
+                    <AuxSendGroup lifecycle={lifecycle} project={project} audioUnitAdapter={adapter}/>
+                    {isOutput
+                        ? <AudioOutputSelector lifecycle={lifecycle} output={service.audioDevices}/>
+                        : <ChannelOutputSelector lifecycle={lifecycle} project={project} adapter={adapter}/>
+                    }
+                    {panningControl}
+                </Frag>
+            )}
+            <div className="twin-layout volume">
+                {volumeLabel}
+                {maxPeakLabel}
+                {volumeControl}
+                {peakMeter}
+            </div>
+            <div className="twin-layout mute-solo">
+                {muteControl}
+                {!isOutput && soloControl}
+            </div>
+        </div>
+    )
+    lifecycle.ownAll(
+        mixer.registerChannelStrip(adapter, {
+            silent: (value: boolean) => peakMeter.classList.toggle("silent", value)
+        } satisfies ChannelStripView),
+        ContextMenu.subscribe(element, collector => {
+            if (adapter.isInstrument) {
+                const isFrozen = project.audioUnitFreeze.isFrozen(adapter)
+                collector.addItems(
+                    MenuItem.default({
+                        label: "Freeze AudioUnit",
+                        hidden: isFrozen
+                    }).setTriggerProcedure(() => project.audioUnitFreeze.freeze(adapter)),
+                    MenuItem.default({
+                        label: "Unfreeze AudioUnit",
+                        hidden: !isFrozen
+                    }).setTriggerProcedure(() => project.audioUnitFreeze.unfreeze(adapter)))
+            }
+            if (isOutput) {
+                collector.addItems(
+                    MenuItem.default({label: "Auto-EQ..."})
+                        .setTriggerProcedure(() => AutoEqAction.run(service, adapter).catch(console.warn)))
+            } else {
+                collector.addItems(
+                    MenuItem.default({label: `Delete '${adapter.input.label.unwrapOrElse("Untitled")}'`})
+                        .setTriggerProcedure(() => deleteUnitWithMedia(project, adapter)))
+            }
+            collector.addItems(
+                MenuItem.default({
+                    label: "Reset Mute",
+                    selectable: rootBoxAdapter.audioUnits.adapters().some(adapter => adapter.box.mute.getValue())
+                }).setTriggerProcedure(() => resetSwitches(project, "mute")),
+                MenuItem.default({
+                    label: "Reset Solo",
+                    selectable: rootBoxAdapter.audioUnits.adapters().some(adapter => adapter.box.solo.getValue())
+                }).setTriggerProcedure(() => resetSwitches(project, "solo")),
+                DebugMenus.debugBox(adapter.box, false)
+            )
+        }),
+        adapter.input.catchupAndSubscribeLabelChange(updateMixerName),
+        watchMidiTrackName(adapter.box, updateMixerName),
+        service.subscribeSignal(() => permanentPeak = Number.NEGATIVE_INFINITY, "reset-peaks"),
+        Events.subscribe(maxPeakLabel, "pointerdown", (event) => {
+            service.resetPeaks()
+            event.stopPropagation()
+            event.preventDefault()
+        }),
+        TextTooltip.default(maxPeakLabel, () => "Click to reset"),
+        adapter.isOutput
+            ? Terminable.Empty
+            : DragAndDrop.installSource(iconElement, () => ({
+                uuid: UUID.toString(adapter.uuid),
+                type: "channelstrip",
+                start_index: adapter.indexField.getValue()
+            }), element),
+        volume.subscribe(updateVolumeLabel),
+        adapter.isInstrument
+            ? project.audioUnitFreeze.subscribe(uuid => {
+                if (UUID.equals(uuid, adapter.uuid)) {
+                    lockIcon.style.display = project.audioUnitFreeze.isFrozen(adapter) ? "" : "none"
+                }
+            })
+            : Terminable.Empty
+    )
+    return element
+}

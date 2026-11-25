@@ -1,0 +1,225 @@
+import {uprightPiano} from "@/flowtu/upright-piano"
+import "./main.sass"
+import {installFlowtu} from "./flowtu"
+
+// Escape hatch for AUTOMATED browser sessions (set `localStorage["opendaw-suppress-unload-guard"]`):
+// swallow every beforeunload prompt so scripted reloads never hang on the native dialog.
+if (localStorage.getItem("opendaw-suppress-unload-guard") !== null) {
+    window.addEventListener("beforeunload", event => event.stopImmediatePropagation(), {capture: true})
+}
+import {App} from "@/ui/App.tsx"
+import {isDefined, panic, Progress, RuntimeNotification, RuntimeNotifier, UUID} from "@opendaw/lib-std"
+import {StudioService} from "@/service/StudioService"
+import {SampleMetaData, SoundfontMetaData} from "@opendaw/studio-adapters"
+import {Dialogs} from "@/ui/components/dialogs.tsx"
+import {installCursors} from "@/ui/Cursors.ts"
+import {BuildInfo} from "./BuildInfo"
+import {Surface} from "@/ui/surface/Surface.tsx"
+import {Layers} from "@/ui/surface/Layers.tsx"
+import {replaceChildren} from "@opendaw/lib-jsx"
+import {
+    AudioContexts,
+    AudioWorklets,
+    BufferUnderrunDetector,
+    CloudAuthManager,
+    ContextMenu,
+    FactoryCatalog,
+    GlobalSampleLoaderManager,
+    GlobalSoundfontLoaderManager,
+    Workers
+} from "@opendaw/studio-core"
+import {OpenPresetAPI, OpenSampleAPI, OpenSoundfontAPI, OpenWclapAPI} from "@/opendaw-api"
+import {testFeatures} from "@/features.ts"
+import {MissingFeature} from "@/ui/MissingFeature.tsx"
+import {UpdateMessage} from "@/ui/UpdateMessage.tsx"
+import {showStoragePersistDialog} from "@/AppDialogs"
+import {Promises} from "@opendaw/lib-runtime"
+import {AnimationFrame, Browser, Html, ShortcutManager} from "@opendaw/lib-dom"
+import {AudioOutputDevice} from "@/audio/AudioOutputDevice"
+import {reportVisitor} from "@/VisitorReporter"
+import {FontLoader} from "@/ui/FontLoader"
+import {ErrorHandler} from "@/errors/ErrorHandler.ts"
+import {AudioData} from "@opendaw/lib-dsp"
+import {ChainedSampleProvider, ChainedSoundfontProvider, ChainedWclapProvider} from "@opendaw/studio-p2p"
+import {IconSymbol, initializeColors, setColorScheme} from "@opendaw/studio-enums"
+import {StudioPreferences, WclapStorage} from "@opendaw/studio-core"
+import {StudioShortcutManager} from "@/service/StudioShortcutManager"
+import {Menu} from "@/ui/components/Menu"
+import {TouchContextMenu} from "@/ui/TouchContextMenu"
+import {WasmEngine} from "@opendaw/studio-core-wasm"
+
+if ("stackTraceLimit" in Error) {Error.stackTraceLimit = 50}
+
+const loadBuildInfo = async () => fetch(`/build-info.json?v=${Date.now()}`)
+    .then(x => x.json())
+    .then(x => BuildInfo.parse(x))
+
+export const boot = async ({workersUrl, workletsUrl, wasmProcessorUrl, wasmOfflineWorkerUrl}: {
+    workersUrl: string, workletsUrl: string
+    wasmProcessorUrl: string, wasmOfflineWorkerUrl: string
+}) => {
+    console.debug("booting...")
+    console.debug(location.origin)
+    const {status, value: buildInfo} = await Promises.tryCatch(loadBuildInfo())
+    if (status === "rejected") {
+        document.querySelector("#preloader")?.remove()
+        alert("Error loading build info. Please reload the page.")
+        return
+    }
+    console.debug("buildInfo", JSON.stringify(buildInfo, null, 2))
+    await FontLoader.load()
+    await Workers.install(workersUrl)
+    AudioWorklets.install(workletsUrl)
+    const testFeaturesResult = await Promises.tryCatch(testFeatures())
+    if (testFeaturesResult.status === "rejected") {
+        document.querySelector("#preloader")?.remove()
+        replaceChildren(document.body, MissingFeature({error: testFeaturesResult.error}))
+        return
+    }
+    console.debug("isLocalHost", Browser.isLocalHost())
+    console.debug("agent", Browser.userAgent)
+    const sampleRate = Browser.isFirefox() ? undefined : 48000
+    console.debug("requesting custom sampleRate", sampleRate ?? "'No (Firefox)'")
+    const context = new AudioContext({sampleRate, latencyHint: 0})
+    console.debug(`AudioContext state: ${context.state}, sampleRate: ${context.sampleRate}`)
+    console.debug(`Error.stackTraceLimit: ${Error.stackTraceLimit ?? "N/A"}`)
+    // purge identifiers written by the old client-side counting (§25 TDDDG)
+    localStorage.removeItem("__id__")
+    localStorage.removeItem("reported-latencies")
+    reportVisitor()
+    const audioWorklets = await Promises.tryCatch(AudioWorklets.createFor(context))
+    if (audioWorklets.status === "rejected") {
+        return panic(audioWorklets.error)
+    }
+    WasmEngine.install({
+        processorUrl: wasmProcessorUrl,
+        offlineWorkerUrl: wasmOfflineWorkerUrl,
+        wasmUrl: `${import.meta.env.BASE_URL}wasm-engine`
+    })
+    if (!await WasmEngine.ensureReady(context)) {
+        document.querySelector("#preloader")?.remove()
+        Dialogs.info({
+            headline: "Engine Unavailable",
+            message: "Flowtu Studio could not load its audio engine. This is usually a temporary network issue, please reload the page."
+        }).finally()
+        return
+    }
+    if (context.state === "suspended") {
+        const resumeOnClick = async () => {
+            if (!await AudioContexts.resume(context)) {return}
+            console.debug(`AudioContext resumed (${context.state})`)
+            window.removeEventListener("click", resumeOnClick, {capture: true})
+        }
+        window.addEventListener("click", resumeOnClick, {capture: true})
+    }
+    const audioDevices = await AudioOutputDevice.create(context)
+    FactoryCatalog.install({
+        samples: () => OpenSampleAPI.get().all().catch(() => []),
+        soundfonts: async () => [uprightPiano, ...(await OpenSoundfontAPI.get().all().catch(() => []))
+            .filter(font => font.uuid !== uprightPiano.uuid)],
+        presets: () => OpenPresetAPI.get().list()
+    })
+    OpenWclapAPI.get().tree().finally()
+    const chainedSampleProvider = new ChainedSampleProvider({
+        fetch: async (uuid: UUID.Bytes, progress: Progress.Handler): Promise<[AudioData, SampleMetaData]> =>
+            OpenSampleAPI.get().load(uuid, progress)
+    })
+    const chainedSoundfontProvider = new ChainedSoundfontProvider({
+        fetch: async (uuid: UUID.Bytes, progress: Progress.Handler): Promise<[ArrayBuffer, SoundfontMetaData]> =>
+            OpenSoundfontAPI.get().load(uuid, progress)
+    })
+    const chainedWclapProvider = new ChainedWclapProvider()
+    WclapStorage.installRemote(async id => (await OpenWclapAPI.get().find(id)).nonEmpty()
+        ? OpenWclapAPI.get().load(id)
+        : chainedWclapProvider.fetch(UUID.parse(id), Progress.Empty))
+    const sampleManager = new GlobalSampleLoaderManager(chainedSampleProvider)
+    const soundfontManager = new GlobalSoundfontLoaderManager(chainedSoundfontProvider)
+    const cloudAuthManager = CloudAuthManager.create({
+        Dropbox: "jtehjzxaxf3bf1l",
+        GoogleDrive: "628747153367-gt1oqcn3trr9l9a7jhigja6l1t3f1oik.apps.googleusercontent.com"
+    })
+    const service: StudioService = new StudioService(context, audioWorklets.value, audioDevices,
+        sampleManager, soundfontManager, chainedSampleProvider, chainedSoundfontProvider, chainedWclapProvider,
+        cloudAuthManager, buildInfo)
+    StudioShortcutManager.install(service)
+    if (isDefined(context.playbackStats)) {
+        new BufferUnderrunDetector(context.playbackStats, service.engine)
+    }
+    const errorHandler = new ErrorHandler(buildInfo, () => service.recovery.createBackupCommand())
+    const surface = Surface.main({
+        config: (surface: Surface) => surface.ownAll(
+            ContextMenu.install(surface.owner, (menuItem, {clientX, clientY, target}) => {
+                Html.unfocus(surface.owner)
+                const offset = 2
+                const x: number = clientX - offset
+                const y: number = clientY
+                const menu = Menu.create(menuItem)
+                menu.moveTo(x, y)
+                menu.attach(target instanceof Element ? Layers.get(target).flyout : surface.flyout)
+            }),
+            TouchContextMenu.install(surface.owner))
+    }, errorHandler)
+    Surface.subscribeKeyboard("keydown", event => ShortcutManager.get().handleEvent(event), Number.MAX_SAFE_INTEGER)
+    StudioPreferences.catchupAndSubscribe(({"neutral-hue": hue, "neutral-saturation": saturation}) => {
+        setColorScheme({hue, saturation: saturation / 100.0})
+        Surface.forEach(surface => initializeColors(surface.owner.document.documentElement))
+    }, "appearance")
+    document.querySelector("#preloader")?.remove()
+    RuntimeNotifier.install({
+        info: (request) => Dialogs.info(request),
+        approve: (request) => Dialogs.approve({...request, reverse: true}),
+        progress: (request): RuntimeNotification.ProgressUpdater => Dialogs.progress(request),
+        notify: ({message, icon, origin}) => Surface.get(origin)
+            .toast(message, isDefined(icon) ? IconSymbol.fromName(icon) : IconSymbol.Notification)
+    })
+    replaceChildren(surface.ground, App(service))
+    const flowtu = installFlowtu(service, surface.ground)
+    AnimationFrame.start(window)
+    installCursors()
+    const opfsProbe = await Promises.tryCatch(Workers.Opfs.isAvailable())
+    if (opfsProbe.status === "rejected" || !opfsProbe.value) {
+        Dialogs.info({
+            headline: "Storage Unavailable",
+            message: "Flowtu Studio cannot start because the browser is blocking access to private storage, so samples, presets and projects cannot be persisted. This typically happens in Private Browsing mode. Please reopen Flowtu Studio in a regular browser window."
+        }).finally()
+        return
+    }
+    await flowtu.start()
+    if (buildInfo.env === "production" && !Browser.isLocalHost()) {
+        if (import.meta.env.BUILD_UUID !== buildInfo.uuid) {
+            console.warn("Cache issue:")
+            console.warn("expected uuid", buildInfo.uuid)
+            console.warn("embedded uuid", import.meta.env.BUILD_UUID)
+            Dialogs.cache()
+            return
+        }
+        const checkExtensions = setInterval(() => {
+            if (document.scripts.length > 1) {
+                Dialogs.info({
+                    headline: "Warning",
+                    message: "Please disable extensions to avoid undefined behavior.",
+                    okText: "Ignore"
+                }).finally()
+                clearInterval(checkExtensions)
+            }
+        }, 5_000)
+        const checkUpdates = setInterval(async () => {
+            if (!navigator.onLine) {return}
+            const {status, value: newBuildInfo} = await Promises.tryCatch(loadBuildInfo())
+            if (status === "resolved" && newBuildInfo.uuid !== undefined && newBuildInfo.uuid !== buildInfo.uuid) {
+                document.body.prepend(UpdateMessage({service}))
+                console.warn("A new version is online.")
+                clearInterval(checkUpdates)
+            }
+        }, 5_000)
+    } else {
+        console.debug("No production checks (build version & updates).")
+    }
+    if (Browser.isFirefox()) {
+        const persisted = await Promises.tryCatch(navigator.storage.persisted())
+        console.debug("Firefox.isPersisted", persisted.value)
+        if (persisted.status === "resolved" && !persisted.value) {
+            await Promises.tryCatch(showStoragePersistDialog())
+        }
+    }
+}

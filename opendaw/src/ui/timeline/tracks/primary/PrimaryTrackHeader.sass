@@ -1,0 +1,50 @@
+@use "@/colors"
+
+@mixin PrimaryTrackHeader
+  display: flex
+  flex-direction: column
+  align-items: end
+  padding-top: 4px
+  padding-right: 4px
+  row-gap: 6px
+  font-size: 10px
+  color: var(--color-shadow)
+  @include colors.panel-background
+
+  > header
+    display: flex
+    flex-direction: row
+    align-items: center
+    column-gap: 0.25em
+
+    > form.conductor-point
+      display: inline-flex
+      align-items: center
+      gap: 4px
+      margin: 0 5px
+
+      input, button, select
+        height: 22px
+        box-sizing: border-box
+        font: 11px/1 system-ui, sans-serif
+        color: #dbe9f5
+        background: #11212e
+        border: 1px solid #365169
+        border-radius: 4px
+        padding-inline: 5px
+
+      input
+        width: 56px
+        font-variant-numeric: tabular-nums
+        &::placeholder
+          color: #b9cddd
+
+      select
+        cursor: pointer
+        width: 78px
+
+      button
+        cursor: pointer
+        white-space: nowrap
+        &:hover
+          background: #26425a

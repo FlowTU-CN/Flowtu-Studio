@@ -1,0 +1,154 @@
+import {AudioFileBox} from "@opendaw/studio-boxes"
+import {isDefined, Option, Procedure, Terminable, UUID} from "@opendaw/lib-std"
+import {Events, Files} from "@opendaw/lib-dom"
+import {Promises} from "@opendaw/lib-runtime"
+import {StudioService} from "@/service/StudioService"
+import {AnyDragData} from "@/ui/AnyDragData"
+import {ContextMenu, FilePickerAcceptTypes, MenuItem} from "@opendaw/studio-core"
+import {PointerField} from "@opendaw/lib-box"
+import {Pointers} from "@opendaw/studio-enums"
+import {DragAndDrop} from "@/ui/DragAndDrop"
+import {Sample} from "@opendaw/studio-adapters"
+
+export interface SampleSelectStrategy {
+    isAttached(): boolean
+    hasSample(): boolean
+    replace(replacement: Option<AudioFileBox>): void
+}
+
+export namespace SampleSelectStrategy {
+    export const changePointer = (filePointer: PointerField<Pointers.AudioFile>,
+                                  replacement: Option<AudioFileBox>): void => {
+        if (!filePointer.box.isAttached()) {return}
+        replacement.match({
+            none: () => filePointer.box.delete(),
+            some: newFile => filePointer.targetVertex.match({
+                none: () => filePointer.refer(newFile), // just refer
+                some: ({box: existingFile}) => {
+                    if (UUID.equals(newFile.address.uuid, existingFile.address.uuid)) {
+                        console.debug("Same Sample. Ignore.")
+                    } else {
+                        const mustDelete = existingFile.pointerHub.size() === 1 // filePointer was the only pointer > delete
+                        filePointer.refer(newFile)
+                        if (mustDelete) {
+                            existingFile.delete()
+                        }
+                    }
+                }
+            })
+        })
+    }
+
+    // Clear the pointer only (the owner box SURVIVES), deleting the target AudioFileBox when this
+    // was its last pointer. The remove path for pointers living on a DEVICE box (Convolver, Nano).
+    export const clearPointer = (filePointer: PointerField<Pointers.AudioFile>): void => {
+        if (!filePointer.box.isAttached()) {return}
+        filePointer.targetVertex.ifSome(({box: existingFile}) => {
+            const mustDelete = existingFile.pointerHub.size() === 1
+            filePointer.defer()
+            if (mustDelete) {existingFile.delete()}
+        })
+    }
+
+    // For a pointer on a dedicated per-sample box (a Playfield slot): removing the sample removes the box.
+    export const forPointerField = (filePointer: PointerField<Pointers.AudioFile>): SampleSelectStrategy => ({
+        isAttached: (): boolean => filePointer.box.isAttached(),
+        hasSample: (): boolean => filePointer.nonEmpty(),
+        replace: (replacement: Option<AudioFileBox>): void => changePointer(filePointer, replacement)
+    })
+
+    // For a pointer on a DEVICE box: removing the sample only empties the slot, never the device.
+    export const forDeviceFile = (filePointer: PointerField<Pointers.AudioFile>): SampleSelectStrategy => ({
+        isAttached: (): boolean => filePointer.box.isAttached(),
+        hasSample: (): boolean => filePointer.nonEmpty(),
+        replace: (replacement: Option<AudioFileBox>): void => replacement.match({
+            none: () => clearPointer(filePointer),
+            some: () => changePointer(filePointer, replacement)
+        })
+    })
+}
+
+export class SampleSelector {
+    readonly #service: StudioService
+    readonly #strategy: SampleSelectStrategy
+
+    constructor(service: StudioService, strategy: SampleSelectStrategy) {
+        this.#service = service
+        this.#strategy = strategy
+    }
+
+    newSample(sample: Sample) {
+        if (!this.#service.hasProfile) {return}
+        if (!this.#strategy.isAttached()) {return}
+        const {project: {boxGraph, editing}} = this.#service
+        const {uuid: uuidAsString, name} = sample
+        const uuid = UUID.parse(uuidAsString)
+        editing.modify(() => this.#strategy.replace(Option.wrap(boxGraph.findBox<AudioFileBox>(uuid)
+            .unwrapOrElse(() => AudioFileBox.create(boxGraph, uuid, box => {
+                box.fileName.setValue(name)
+                box.endInSeconds.setValue(sample.duration)
+            })))))
+    }
+
+    replaceSample(replacement: Option<AudioFileBox>) {
+        if (!this.#service.hasProfile) {return}
+        const {project: {editing}} = this.#service
+        editing.modify(() => this.#strategy.replace(replacement))
+    }
+
+    hasSample(): boolean {return this.#strategy.hasSample()}
+
+    createRemoveMenuData(): MenuItem {
+        return MenuItem.default({
+            label: "Remove Sample",
+            selectable: this.hasSample()
+        }).setTriggerProcedure(() => this.replaceSample(Option.None))
+    }
+
+    createBrowseMenuData(): MenuItem {
+        return MenuItem.default({
+            label: "Browse Sample..."
+        }).setTriggerProcedure(() => this.browse())
+    }
+
+    async browse() {
+        const {status, value: sample} = await Promises.tryCatch(
+            Files.open(FilePickerAcceptTypes.WavFiles)
+                .then(([file]) => file.arrayBuffer()
+                    .then(arrayBuffer => this.#service.sampleService.importFile({name: file.name, arrayBuffer}))))
+        if (status === "resolved") {
+            this.#service.project.trackUserCreatedSample(UUID.parse(sample.uuid))
+            this.newSample(sample)
+        }
+    }
+
+    configureBrowseClick(button: Element): Terminable {
+        return Events.subscribe(button, "click", async () => this.browse())
+    }
+
+    configureContextMenu(button: Element): Terminable {
+        return ContextMenu.subscribe(button, collector => collector.addItems(this.createRemoveMenuData()))
+    }
+
+    async #importDropped(files: ReadonlyArray<File>): Promise<Option<Sample>> {
+        const imported = await this.#service.sampleService.importFiles(files)
+        imported.forEach(entry => this.#service.project.trackUserCreatedSample(UUID.parse(entry.uuid)))
+        return Option.wrap(imported.at(0))
+    }
+
+    configureDrop(dropZone: HTMLElement, onShiftDrop?: Procedure<Sample>): Terminable {
+        return DragAndDrop.installTarget(dropZone, {
+            drag: (_event: DragEvent, data: AnyDragData): boolean => data.type === "sample" || data.type === "file",
+            drop: async (event: DragEvent, data: AnyDragData): Promise<void> => {
+                if (!(data.type === "sample" || data.type === "file")) {return}
+                const shift = event.shiftKey
+                const optSample = data.type === "sample"
+                    ? Option.wrap(data.sample)
+                    : await this.#importDropped(data.files)
+                optSample.ifSome(sample => shift && isDefined(onShiftDrop) ? onShiftDrop(sample) : this.newSample(sample))
+            },
+            enter: (allowDrop: boolean) => dropZone.classList.toggle("accept", allowDrop),
+            leave: () => dropZone.classList.remove("accept")
+        })
+    }
+}
