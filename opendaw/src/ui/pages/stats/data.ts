@@ -180,7 +180,7 @@ export const fetchSponsorStats = async (): Promise<SponsorStats> =>
     fetchJson<SponsorStats>(`/sponsors.json?t=${Date.now()}`)
 
 export const fetchBuildInfo = async (): Promise<BuildInfo> =>
-    fetchJson<BuildInfo>(`/build-info.json?t=${Date.now()}`)
+    fetchJson<BuildInfo>(`${import.meta.env.BASE_URL}build-info.json?t=${Date.now()}`)
 
 export const formatRelativeDate = (timestamp: number): string => {
     const diff = Date.now() - timestamp

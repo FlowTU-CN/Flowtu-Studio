@@ -50,7 +50,7 @@ import {WasmEngine} from "@opendaw/studio-core-wasm"
 
 if ("stackTraceLimit" in Error) {Error.stackTraceLimit = 50}
 
-const loadBuildInfo = async () => fetch(`/build-info.json?v=${Date.now()}`)
+const loadBuildInfo = async () => fetch(`${import.meta.env.BASE_URL}build-info.json?v=${Date.now()}`)
     .then(x => x.json())
     .then(x => BuildInfo.parse(x))
 
