@@ -20,7 +20,7 @@ export const OpenProjectPage: PageFactory<StudioService> = ({service}: PageConte
         <div className={className} onInit={async (_element) => {
             const payload = location.hash.substring(1)
             const name = new URLSearchParams(location.search).get("name") ?? "Untitled"
-            history.replaceState(null, "", "/") // keeps the payload out of the address bar, a reload must not reopen it
+            history.replaceState(null, "", import.meta.env.BASE_URL) // keeps the payload out of the address bar, a reload must not reopen it
             const dialog = RuntimeNotifier.progress({headline: "Opening project..."})
             const {status, value: profile, error} = await Promises.tryCatch(inflate(payload)
                 .then(buffer => Project.loadAnyVersion(service, buffer))

@@ -126,7 +126,7 @@ const downloadModel = async (modelUrl: string, signal?: AbortSignal): Promise<st
     (await apiFetch(modelUrl, signal)).text()
 
 const selectTone = async (): Promise<string> => {
-    const redirectUri = `${location.origin}/tone3000-callback.html`
+    const redirectUri = `${location.origin}${import.meta.env.BASE_URL}tone3000-callback.html`
     const {codeVerifier, codeChallenge} = await createPkceCodes()
     const state = crypto.randomUUID()
     const params = new URLSearchParams({

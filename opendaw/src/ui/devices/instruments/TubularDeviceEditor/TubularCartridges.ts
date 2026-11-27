@@ -17,7 +17,7 @@ export type TubularCartridge = {
 type IndexEntry = Omit<TubularCartridge, "voices">
 
 export class TubularCartridges {
-    static readonly Root = "/tubular"
+    static readonly Root = `${import.meta.env.BASE_URL}tubular`
 
     @Lazy
     static get(): TubularCartridges {return new TubularCartridges()}

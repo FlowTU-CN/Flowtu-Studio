@@ -23,6 +23,10 @@ type LiteAPI = {
     example():Promise<void>
     exportMix():void
     markCue():boolean
+    cloud?: {saveProjectForGeneration(name: string, generationKey: string): Promise<void>;
+        cloudProjectId(): string | undefined;
+        generationScope(): string | undefined;
+        addToProject(song: {songKey: string; title: string; durationMs?: number; playUrl: string | null}): Promise<void>}
 }
 /** Both views retain the very same monitor, scoring state, project and audio worklet. */
 export function installLiteStudio(bar: HTMLElement, api: LiteAPI) {
@@ -73,7 +77,7 @@ export function installLiteStudio(bar: HTMLElement, api: LiteAPI) {
         finally {demo.disabled=false;refresh()}
     }
     demo.onclick=()=>void loadExample()
-    const panel=createLiteScorePanel(service,{getVideo:api.picture,markCue:api.markCue,beforeGenerate:()=>analysis.beforeGenerate()})
+    const panel=createLiteScorePanel(service,{getVideo:api.picture,markCue:api.markCue,beforeGenerate:()=>analysis.beforeGenerate(),cloud:api.cloud})
     layout.append(panel.inspector,panel.timeline,panel.dock)
     const importClip=document.createElement('button')
     importClip.type='button';importClip.className='ft-lite-import-clip';importClip.dataset.lite='audio';importClip.dataset.i18n=''

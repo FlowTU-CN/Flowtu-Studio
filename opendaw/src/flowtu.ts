@@ -33,8 +33,9 @@ import {timeSettings, setTimeSettings} from './flowtu/time-settings'
 import {getFrameRate} from './flowtu/time-format'
 import {PanelType} from './ui/workspace/PanelType'
 import {StudioService} from './service/StudioService'
-import {InstrumentFactories} from '@opendaw/studio-adapters'
+import {InstrumentFactories, MetaData} from '@opendaw/studio-adapters'
 import {Project, ProjectBundle, ProjectMeta, ProjectProfile} from '@opendaw/studio-core'
+import {fetchStudioAudio} from './flowtu/studio-audio'
 import {encodeStudioBundle} from './flowtu/retained-preset-resources'
 import {Option, Progress, UUID} from '@opendaw/lib-std'
 import {PPQN} from '@opendaw/lib-dsp'
@@ -53,17 +54,17 @@ export function installFlowtu(service: StudioService, ground: Element) {
     Object.assign(Files, {save:saveNativeFile})
     const bar = document.createElement('div')
     bar.className = 'flowtu-bar'
-    bar.innerHTML = `<div class="flowtu-brand"><img src="/flowtu-wordmark.png" alt="flowtu" width="994" height="210"><span>STUDIO.</span></div>
+    bar.innerHTML = `<div class="flowtu-brand"><img src="${import.meta.env.BASE_URL}flowtu-wordmark.png" alt="flowtu" width="994" height="210"><span>STUDIO.</span></div>
       <button data-action="library" aria-expanded="false">Library</button><button data-action="devices" aria-expanded="false">Inserts</button><button data-action="new">New Project</button><select aria-label="Audio import track"></select>
       <button data-action="audio">Import audio or MIDI</button><button data-action="video">Video</button>
       <button data-action="save">Save</button>
       <button data-action="open">Open project</button><button data-action="save-copy">Save as copy</button><button data-action="import-project">Import project file…</button><button data-action="export-project">Export project copy…</button><button data-action="wav">Export WAV</button>
       <span class="flowtu-status" role="status">Starting audio engine…</span><button data-action="help">Help</button>
-      <a href="/source.html" target="_blank" rel="noopener">Source</a>`
+      <a href="${import.meta.env.BASE_URL}source.html" target="_blank" rel="noopener">Source</a>`
     const home = document.createElement('a')
     home.className = 'flowtu-home'
     home.dataset.i18n = ''
-    home.href = import.meta.env.VITE_FLOWTU_HOME_URL || 'https://flowtu-studio-home-2026.coykaka.chatgpt.site/'
+    home.href = import.meta.env.VITE_FLOWTU_HOME_URL || '/'
     home.target = '_top'
     // The hosted Studio has a native beforeunload guard. Its localhost build
     // skips that guard, so use the same dirty-project check as File → Open.
@@ -150,11 +151,11 @@ export function installFlowtu(service: StudioService, ground: Element) {
         if (!videoFile || video.readyState < 1) {tell('Import a reference video first.'); return}
         if (videoWindow.open()) tell('Video opened in a separate window · Drag it to your other display.')
     }
-    const run = async (action: () => Promise<void>) => {
-        if (busy) return
+    const run = async (action: () => Promise<void>, propagate = false) => {
+        if (busy) {if (propagate) throw new Error(tr('Another operation is in progress. Try again shortly.')); return}
         busy = true
         bar.setAttribute('aria-busy', 'true')
-        try {await action()} catch (error) {console.error(error); tell(`Unable to complete: ${error instanceof Error ? error.message : String(error)}`)}
+        try {await action()} catch (error) {console.error(error); tell(`Unable to complete: ${error instanceof Error ? tr(error.message) : String(error)}`); if (propagate) throw error}
         finally {busy = false; bar.removeAttribute('aria-busy')}
     }
     const chooseFiles = (accept: string, multiple: boolean, submit: (files: File[]) => void) => {
@@ -362,7 +363,7 @@ export function installFlowtu(service: StudioService, ground: Element) {
                         else service.timeline.range.showUnitInterval(0, Math.max(PPQN.Bar * 4, region.complete + PPQN.Bar))
                     }
                     tell(destination.kind === 'assets' ? file.name + ' added to Assets' : 'Imported ' + file.name)
-                } catch (error) {tell(file.name + ' · ' + (error instanceof Error ? error.message : String(error)))}
+                } catch (error) {tell(file.name + ' · ' + (error instanceof Error ? tr(error.message) : String(error)))}
             }
         })
         return accepted
@@ -466,20 +467,83 @@ export function installFlowtu(service: StudioService, ground: Element) {
                 try {
                     const synced = await syncProject(local, blob)
                     if (stillOpen()) shelfEntry = synced
-                    projectStatus(tr('Project saved to your account.'))
+                    rememberCloudProjectId(local.id)
+                    projectStatus(tr(synced.generationLink === '0' || synced.generationLink === 'error'
+                        ? 'Project saved, but generation history was not linked. Save again to retry.' : 'Project saved to your account.'))
                 } catch (error) {
                     if (error instanceof ProjectConflict) {
                         projectStatus(tr('Your edits are saved in Device drafts. A newer version is in your account.'))
                         if (await chooseConflictCopy(true)) await saveProject(true)
                         return
                     }
-                    projectStatus(tr('Saved on this device · Cloud sync pending.') + ' ' + (error instanceof Error ? error.message : String(error)))
+                    projectStatus(tr('Saved on this device · Cloud sync pending.') + ' ' + (error instanceof Error ? tr(error.message) : String(error)))
                 }
             } else projectStatus(tr('Saved in the device library.'))
         } catch (error) {
-            projectStatus(error instanceof Error ? error.message : String(error))
+            projectStatus(error instanceof Error ? tr(error.message) : String(error))
             throw error
         } finally {observer.terminate()}
+    }
+    // First save after a cloud generation: always creates a new project (If-None-Match) and
+    // links it to the generation through X-Studio-Generation-Key so the server records studio_key.
+    async function saveProjectForGeneration(name: string, generationKey: string) {
+        if (!service.hasProfile) throw new Error(tr('Create a project first.'))
+        const profile = service.profile, stillOpen=()=>service.hasProfile && service.profile===profile
+        const cloud = await cloudLibrary()
+        if (!stillOpen()) throw new Error(tr('The open project changed.'))
+        const owner = cloud.kind==='online' ? accountOwner(cloud.library.accountId) : guestOwner
+        const title={name,modified:new Date().toISOString()}
+        // Keep both the id in the archive and the link in the device draft before publishing.
+        const base = shelfEntry?.generationKey === generationKey && shelfEntry.owner === owner ? shelfEntry : undefined
+        const id = base?.id ?? crypto.randomUUID()
+        if (owner !== guestOwner) rememberCloudProjectId(id)
+        projectStatus(tr('Saving project…'))
+        const blob = await snapshot(title)
+        const local = await saveDeviceProject(owner, name, blob, base, {id, generationKey})
+        if (!stillOpen()) throw new Error(tr('The open project changed.'))
+        shelfEntry = local; lastProjectFile = undefined
+        profile.updateMetaData('name',name);profile.updateMetaData('modified',title.modified)
+        checkpoint(); lite?.refresh()
+        if (owner === guestOwner) {
+            projectStatus(tr('Saved on this device · Sign in from Open project to sync.'))
+            throw new Error(tr('Saved on this device · Sign in from Open project to sync.'))
+        }
+        projectStatus(tr('Saved on this device · Syncing…'))
+        try {
+            const synced = await syncProject(local, blob, {generationKey})
+            if (stillOpen()) shelfEntry = synced
+            projectStatus(tr('Project saved to your account.'))
+            if (synced.generationLink === '0' || synced.generationLink === 'error')
+                throw new Error(tr('Project saved, but generation history was not linked. Save again to retry.'))
+        } catch (error) {
+            if (shelfEntry?.pending) projectStatus(tr('Saved on this device · Cloud sync pending.') + ' ' + (error instanceof Error ? tr(error.message) : String(error)))
+            throw error
+        }
+    }
+    // The id is written before snapshotting; only confirmed cloud saves can own new generations.
+    // It lives in project metadata, so a reload restores the history link without the shelf entry.
+    const cloudProjectOrigin = 'flowtu:cloud-project-id:v1'
+    const rememberCloudProjectId = (id: string) => {
+        if (!service.hasProfile) return
+        service.project.editing.modify(() => MetaData.store(service.project.rootBox, {version: 1, id}, cloudProjectOrigin), true)
+    }
+    const cloudProjectId = (): string | undefined => {
+        if (shelfEntry) return shelfEntry.owner !== guestOwner && shelfEntry.revision ? shelfEntry.id : undefined
+        if (!service.hasProfile) return undefined
+        const data = MetaData.read(service.project.rootBox, cloudProjectOrigin) as {version?: number; id?: string} | null
+        return data && data.version === 1 && typeof data.id === 'string' && data.id ? data.id : undefined
+    }
+    async function addGeneratedSong(song: {songKey: string; title: string; durationMs?: number; playUrl: string | null}) {
+        if (!service.hasProfile) throw new Error(tr('Create a project first.'))
+        if (!song.playUrl) throw new Error(tr('The audio link expired. Refresh the generation history and try again.'))
+        projectStatus(tr('Downloading generated audio…'))
+        const profile = service.profile
+        const blob = await fetchStudioAudio(song.playUrl)
+        if (!service.hasProfile || service.profile !== profile) throw new Error(tr('The open project changed.'))
+        const extension = blob.type.includes('wav') ? 'wav' : blob.type.includes('ogg') ? 'ogg' : 'mp3'
+        const file = new File([blob], `${song.title || song.songKey}.${extension}`, {type: blob.type || 'audio/mpeg'})
+        await placeFiles([file], {assetsFirst: true})
+        projectStatus(tr('Generated audio added to Assets.') + ' ' + (song.title || song.songKey))
     }
     async function openProject(file: Blob, native = false, entry?: ProjectEntry) {
         projectStatus(tr('Opening project…'))
@@ -593,7 +657,7 @@ export function installFlowtu(service: StudioService, ground: Element) {
             tell('Video imported · Original audio added on a new track')
         } catch (error) {
             console.warn('Video soundtrack import failed:', error)
-            const detail = error instanceof Error ? error.message : String(error)
+            const detail = error instanceof Error ? tr(error.message) : String(error)
             tell(`Video ready · No audio track added: ${detail}. If this codec is unsupported, import its audio as WAV.`)
         }
     }
@@ -684,7 +748,7 @@ export function installFlowtu(service: StudioService, ground: Element) {
     fileMenu.panel.append(document.createElement('hr'), ...actions('library', 'devices'))
     const disposeSettings = installStudioSettings(fileMenu.panel)
     fileMenu.panel.append(document.createElement('hr'), ...actions('help'))
-    fileMenu.panel.append(bar.querySelector<HTMLAnchorElement>('a[href="/source.html"]')!)
+    fileMenu.panel.append(bar.querySelector<HTMLAnchorElement>('a[href$="/source.html"]')!)
     const importTrack = document.createElement('label')
     importTrack.className = 'flowtu-import-track'
     importTrack.append('Audio destination', select)
@@ -699,6 +763,10 @@ export function installFlowtu(service: StudioService, ground: Element) {
         importVideo,
         importAudio: () => pickMedia({assetsFirst:true}),
         saveProject: () => trigger('save'),
+        saveProjectForGeneration: (name, generationKey) => run(async () => await saveProjectForGeneration(name, generationKey), true),
+        cloudProjectId: () => cloudProjectId(),
+        generationScope: () => service.hasProfile ? UUID.toString(service.project.rootBox.address.uuid) : undefined,
+        addGeneratedSong: song => run(async () => await addGeneratedSong(song), true),
         openVideoWindow,
         dockVideoWindow: () => videoWindow.dock(),
         isVideoWindowOpen: () => videoWindow.isOpen(),
@@ -733,9 +801,15 @@ export function installFlowtu(service: StudioService, ground: Element) {
             duration:Number.isFinite(video.duration) ? video.duration : 0}),
         importVideo, importClip:()=>pickMedia({quickTimeline:true,position:service.hasProfile?timelinePosition(service.project):0}),
         markCue:()=>scoring!.markCueAtPlayhead(false), exportMix:()=>trigger('wav'),
+        cloud: {
+            saveProjectForGeneration: (name, generationKey) => run(async () => await saveProjectForGeneration(name, generationKey), true),
+            cloudProjectId: () => cloudProjectId(),
+            generationScope: () => service.hasProfile ? UUID.toString(service.project.rootBox.address.uuid) : undefined,
+            addToProject: song => run(async () => await addGeneratedSong(song), true)
+        },
         example: async () => {
             if (!canLoadLiteDemo(service,!!videoFile)) {
-                window.open('/?mode=lite&example=last-train','_blank','noopener')
+                window.open(`${import.meta.env.BASE_URL}?mode=lite&example=last-train`,'_blank','noopener')
                 return
             }
             await run(async () => {

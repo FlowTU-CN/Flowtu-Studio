@@ -20,6 +20,10 @@
 .ft-project-library .ft-project-item:hover {background: #2b4054}
 .ft-project-item strong {overflow-wrap: anywhere}
 .ft-project-item small {color: #adbfce; font-size: 12px}
+.ft-project-library .ft-project-row {display: flex; align-items: stretch; gap: 6px; margin: 4px 0}
+.ft-project-library .ft-project-row .ft-project-item {margin: 0; flex: 1 1 auto}
+.ft-project-library .ft-project-delete {flex: 0 0 auto; align-self: center; padding: 6px 10px}
+.ft-project-library .ft-project-delete:hover {background: #5d2f35; border-color: #7e4048}
 
 .ft-project-library form {display:grid;gap:12px}
 .ft-project-library form select {min-height:38px;padding:6px 10px;border:1px solid #485b6d;border-radius:6px;background:#0c1620;color:inherit;font:inherit}

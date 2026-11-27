@@ -1,0 +1,84 @@
+diff --git a/dist/routes.d.ts b/dist/routes.d.ts
+index 9f67d6cefd5da2512dc4f175315221cdf8529f03..deb66634e797077cf44e7ca741b82c43d7e82672 100644
+--- a/dist/routes.d.ts
++++ b/dist/routes.d.ts
+@@ -1,4 +1,5 @@
+ import { Observer, Option, Subscription } from "@opendaw/lib-std";
++export declare const withBase: (path: string) => string;
+ export declare class RouteLocation {
+     #private;
+     static get(): RouteLocation;
+diff --git a/dist/routes.js b/dist/routes.js
+index acf2413d6c0424e8e702d4d960ab933c4a3c29bb..aad19c92b27b3c04d9505c62ffa683d646dac3a9 100644
+--- a/dist/routes.js
++++ b/dist/routes.js
+@@ -8,6 +8,19 @@ var __metadata = (this && this.__metadata) || function (k, v) {
+     if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(k, v);
+ };
+ import { isDefined, Lazy, Notifier, Option } from "@opendaw/lib-std";
++// Flowtu Studio mounts the app under a sub-path (vite `base`, e.g. "/studio/").
++// History entries and route matching must agree on that prefix, so every path
++// crossing the URL boundary is normalized here — the single choke point for
++// the Router, LocalLink and every navigateTo/replaceWith caller.
++const baseUrl = () => {
++    try { return import.meta.env?.BASE_URL ?? "/"; } catch { return "/"; }
++};
++export const withBase = (path) => {
++    const base = baseUrl();
++    if (base === "/" || !path.startsWith("/") || path.startsWith("//")) return path;
++    if (path === base.slice(0, -1) || path.startsWith(base)) return path;
++    return base.endsWith("/") ? base.slice(0, -1) + path : base + path;
++};
+ export class RouteLocation {
+     static get() { return new RouteLocation(); }
+     #notifier = new Notifier();
+@@ -20,7 +33,7 @@ export class RouteLocation {
+         if (this.path === path) {
+             return false;
+         }
+-        history.pushState(null, "", path);
++        history.pushState(null, "", withBase(path));
+         this.#setCanonical();
+         this.#notifier.notify(this);
+         return true;
+@@ -31,7 +44,7 @@ export class RouteLocation {
+         if (this.path === path) {
+             return false;
+         }
+-        history.replaceState(null, "", path);
++        history.replaceState(null, "", withBase(path));
+         this.#setCanonical();
+         this.#notifier.notify(this);
+         return true;
+@@ -40,7 +53,14 @@ export class RouteLocation {
+         observer(this);
+         return this.#notifier.subscribe(observer);
+     }
+-    get path() { return location.pathname; }
++    get path() {
++        const base = baseUrl(), pathname = location.pathname;
++        if (base !== "/") {
++            if (pathname.startsWith(base)) return pathname.slice(base.length - 1);
++            if (pathname === base.slice(0, -1)) return "/";
++        }
++        return pathname;
++    }
+     #setCanonical() {
+         const url = location.href;
+         let link = document.querySelector("link[rel=\"canonical\"]");
+diff --git a/dist/std/LocalLink.js b/dist/std/LocalLink.js
+index 7277b5efccf9654ad7dc787662133f56bdf4d039..a17e5e43a7b3e7c4639169ea155bb021861c133e 100644
+--- a/dist/std/LocalLink.js
++++ b/dist/std/LocalLink.js
+@@ -1,8 +1,9 @@
+ import { TerminatorUtils } from "@opendaw/lib-dom";
+ import { createElement } from "../create-element";
+-import { RouteLocation, RouteMatcher } from "../routes";
++import { RouteLocation, RouteMatcher, withBase } from "../routes";
+ export const LocalLink = ({ href, className }) => TerminatorUtils
+-    .watchWeak(createElement("a", { href: href, className: className, onclick: (event) => {
++    .watchWeak(createElement("a", { href: withBase(href), className: className, onclick: (event) => {
++        if (event.button !== 0 || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;
+         event.preventDefault();
+         RouteLocation.get().navigateTo(href);
+     }, link: true }), weakRef => RouteLocation.get().catchupAndSubscribe(location => weakRef.deref()?.classList.toggle("active", RouteMatcher.match(location.path, href))));

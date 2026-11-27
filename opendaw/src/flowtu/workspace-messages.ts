@@ -136,5 +136,51 @@ Online samples unavailable. Local audio is available.|在线采样库暂不可�
 The target clip has changed.|目标片段已更改。|El clip de destino ha cambiado.|O clipe de destino mudou.|対象クリップが変更されました。|대상 클립이 변경되었습니다.
 Invalid sample duration.|采样时长无效。|Duración de muestra no válida.|Duração da amostra inválida.|サンプルの長さが無効です。|샘플 길이가 잘못되었습니다.
 This track cannot be edited.|当前轨道无法编辑。|No se puede editar esta pista.|Não é possível editar esta faixa.|このトラックは編集できません。|이 트랙을 편집할 수 없습니다.
+Generate song · Cloud|云端生成歌曲|Generar canción · Nube|Gerar música · Nuvem|曲生成 · クラウド|곡 생성 · 클라우드
+Model|模型|Modelo|Modelo|モデル|모델
+Songs|歌曲数量|Canciones|Canções|曲数|곡 수
+Instrumental|纯音乐|Instrumental|Instrumental|インストゥルメンタル|Instrumental
+With lyrics|带歌词|Con letra|Com letra|歌詞付き|가사 포함
+Lyrics|歌词|Letra|Letra|歌詞|가사
+Generate song|生成歌曲|Generar canción|Gerar música|曲を生成|곡 생성
+Regenerate|再生成|Regenerar|Regerar|再生成|다시 생성
+credits|积分|créditos|créditos|クレジット|크레딧
+Songs are generated in the cloud. Sign in on flowtu.cn to use this.|歌曲在云端生成。请先登录 flowtu.cn。|Las canciones se generan en la nube. Inicia sesión en flowtu.cn.|As músicas são geradas na nuvem. Entre em flowtu.cn.|曲はクラウドで生成されます。flowtu.cn にログインしてください。|곡은 클라우드에서 생성됩니다. flowtu.cn에 로그인하세요.
+Songs are generated in the cloud and stay linked to this project.|歌曲在云端生成，并与此工程关联。|Las canciones se generan en la nube y quedan vinculadas a este proyecto.|As músicas são geradas na nuvem e ficam vinculadas a este projeto.|曲はクラウドで生成され、このプロジェクトに紐付きます。|곡은 클라우드에서 생성되며 이 프로젝트에 연결됩니다.
+Cloud generation is unavailable for this account.|当前账号暂不可用云端生成。|La generación en la nube no está disponible para esta cuenta.|A geração em nuvem não está disponível para esta conta.|このアカウントではクラウド生成を利用できません。|이 계정에서는 클라우드 생성을 사용할 수 없습니다.
+Your audio is being generated…|您的音频在生成中…|Tu audio se está generando…|Seu áudio está sendo gerado…|オーディオを生成中です…|오디오를 생성 중입니다…
+The generation failed. Try again.|生成失败，请重试。|La generación falló. Inténtalo de nuevo.|A geração falhou. Tente novamente.|生成に失敗しました。もう一度お試しください。|생성에 실패했습니다. 다시 시도하세요.
+The generation failed.|生成失败。|La generación falló.|A geração falhou.|生成に失敗しました。|생성에 실패했습니다.
+Preview the songs below.|在下方试听生成结果。|Escucha las canciones abajo.|Ouça as músicas abaixo.|下の曲を再生してください。|아래에서 곡을 미리 들어보세요.
+Sign in on flowtu.cn to generate songs.|请登录 flowtu.cn 后生成歌曲。|Inicia sesión en flowtu.cn para generar canciones.|Entre em flowtu.cn para gerar músicas.|flowtu.cn にログインして曲を生成してください。|flowtu.cn에 로그인해 곡을 생성하세요.
+Untitled song|未命名歌曲|Canción sin título|Música sem título|無題の曲|제목 없는 곡
+Name this project|给 Studio 取名|Nombra este proyecto|Nomeie este projeto|プロジェクトに名前を付ける|이 프로젝트 이름 정하기
+Saving to your account links the generated songs to this project.|保存到账号后，生成结果将关联此工程。|Guardar en tu cuenta vincula las canciones generadas a este proyecto.|Salvar na sua conta vincula as músicas geradas a este projeto.|アカウントに保存すると、生成した曲がこのプロジェクトに紐付きます。|계정에 저장하면 생성된 곡이 이 프로젝트에 연결됩니다.
+History|历史生成|Historial|Histórico|履歴|기록
+Load settings|载入设置|Cargar ajustes|Carregar ajustes|設定を読み込む|설정 불러오기
+Add to project|加入工程|Añadir al proyecto|Adicionar ao projeto|プロジェクトに追加|프로젝트에 추가
+Loaded the generation settings.|已载入该次生成的设置。|Ajustes de generación cargados.|Ajustes de geração carregados.|生成設定を読み込みました。|생성 설정을 불러왔습니다.
+No generations saved for this project yet.|此工程还没有生成记录。|Aún no hay generaciones para este proyecto.|Ainda não há gerações para este projeto.|このプロジェクトの生成履歴はまだありません。|이 프로젝트에는 아직 생성 기록이 없습니다.
+Downloading generated audio…|正在下载生成的音频…|Descargando el audio generado…|Baixando o áudio gerado…|生成したオーディオをダウンロード中…|생성된 오디오를 다운로드 중…
+Generated audio added to Assets.|生成音频已加入素材库。|Audio generado añadido a Archivos.|Áudio gerado adicionado a Arquivos.|生成オーディオをアセットに追加しました。|생성된 오디오를 에셋에 추가했습니다.
+The audio link expired. Refresh the generation history and try again.|音频链接已过期，请刷新生成历史后重试。|El enlace de audio expiró. Actualiza el historial e inténtalo de nuevo.|O link do áudio expirou. Atualize o histórico e tente novamente.|オーディオリンクの有効期限が切れました。履歴を更新して再試行してください。|오디오 링크가 만료되었습니다. 기록을 새로 고침하고 다시 시도하세요.
+The audio could not be downloaded. The signed URL must allow downloads from Studio.|无法下载该音频：签名链接需要允许 Studio 下载（联调确认项）。|No se pudo descargar el audio. La URL firmada debe permitir descargas desde Studio.|Não foi possível baixar o áudio. A URL assinada deve permitir downloads do Studio.|オーディオをダウンロードできませんでした。署名付き URL からのダウンロードが必要です。|오디오를 다운로드하지 못했습니다. 서명된 URL이 다운로드를 허용해야 합니다.
+Create a project first.|请先创建工程。|Crea un proyecto primero.|Crie um projeto primeiro.|先にプロジェクトを作成してください。|먼저 프로젝트를 만들어 주세요.
+Resume generation|恢复生成|Reanudar generación|Retomar geração|生成を再開|생성 재개
+Sign in on flowtu.cn to continue.|请在 flowtu.cn 登录后继续。|Inicia sesión en flowtu.cn para continuar.|Entre em flowtu.cn para continuar.|続行するには flowtu.cn にログインしてください。|계속하려면 flowtu.cn에 로그인하세요.
+Cloud unavailable. Resume your generation when connected.|云端暂不可用，连接恢复后可继续生成。|Nube no disponible. Reanuda al conectarte.|Nuvem indisponível. Retome quando conectar.|クラウドに接続後、生成を再開してください。|클라우드 연결이 복구되면 생성을 재개하세요.
+Some songs failed. Available songs are kept below.|部分歌曲生成失败，已保留可用歌曲。|Algunas canciones fallaron. Se conservan las disponibles.|Algumas músicas falharam. As disponíveis foram mantidas.|一部の曲が失敗しました。利用可能な曲は保持されています。|일부 곡 생성에 실패했습니다. 사용 가능한 곡은 유지됩니다.
+Only {0} of {1} songs are available. You can generate another song separately.|本次仅获得 {0}/{1} 首歌曲，可单独发起补充生成。|Solo hay {0} de {1} canciones. Puedes generar otra por separado.|Há apenas {0} de {1} músicas. Você pode gerar outra separadamente.|{1} 曲中 {0} 曲を取得しました。追加の曲は別途生成できます。|{1}곡 중 {0}곡만 생성되었습니다. 추가 곡을 별도로 생성할 수 있습니다.
+Project saved, but generation history was not linked. Save again to retry.|工程已保存，但生成历史未关联，请再次保存重试。|Proyecto guardado sin vincular el historial. Guarda de nuevo.|Projeto salvo sem vincular o histórico. Salve novamente.|保存しましたが生成履歴を関連付けできませんでした。再保存してください。|프로젝트는 저장되었으나 생성 기록이 연결되지 않았습니다. 다시 저장하세요.
+Another operation is in progress. Try again shortly.|其他操作正在进行，请稍后重试。|Hay otra operación en curso. Inténtalo pronto.|Outra operação está em andamento. Tente em breve.|別の操作が進行中です。しばらくして再試行してください。|다른 작업이 진행 중입니다. 잠시 후 다시 시도하세요.
+The open project changed.|当前打开的工程已切换。|El proyecto abierto ha cambiado.|O projeto aberto mudou.|開いているプロジェクトが変わりました。|열린 프로젝트가 변경되었습니다.
+Storage quota exceeded. Free up space before syncing.|存储空间不足，请清理空间后再同步。|Sin espacio. Libera espacio antes de sincronizar.|Sem espaço. Libere espaço antes de sincronizar.|容量不足です。空き容量を確保して同期してください。|저장 공간이 부족합니다. 공간을 확보한 후 동기화하세요.
+Cloud storage is temporarily unavailable. Your device draft is kept.|云存储暂不可用，本机草稿已保留。|Almacenamiento no disponible. Se conserva el borrador local.|Armazenamento indisponível. O rascunho local foi mantido.|クラウド保存を利用できません。ローカル下書きは保持されています。|클라우드 저장소를 사용할 수 없습니다. 기기 초안은 유지됩니다.
+The project exceeds 500MB. Reduce its size before syncing.|工程超过 500MB，请缩小后再同步。|El proyecto supera 500MB. Reduce su tamaño.|O projeto excede 500MB. Reduza seu tamanho.|500MB を超えています。サイズを減らしてください。|프로젝트가 500MB를 초과합니다. 크기를 줄이세요.
+The upload expired. Save the project again.|上传会话已过期，请重新保存工程。|La carga caducó. Guarda de nuevo.|O envio expirou. Salve novamente.|アップロードが期限切れです。再保存してください。|업로드가 만료되었습니다. 다시 저장하세요.
+The upload is incomplete. Save the project again.|上传分片不完整，请重新保存工程。|Carga incompleta. Guarda de nuevo.|Envio incompleto. Salve novamente.|アップロードが不完全です。再保存してください。|업로드가 불완전합니다. 다시 저장하세요.
+This cloud project was deleted. Save as a new copy.|云工程已删除，请另存为新副本。|El proyecto fue eliminado. Guarda una copia nueva.|O projeto foi excluído. Salve uma nova cópia.|削除済みです。新しいコピーとして保存してください。|클라우드 프로젝트가 삭제되었습니다. 새 사본으로 저장하세요.
+Preview song|试听歌曲|Escuchar canción|Ouvir música|曲を試聴|곡 미리 듣기
+The audio could not be downloaded. Refresh the generation history and try again.|音频下载失败，请刷新生成历史后重试。|No se pudo descargar el audio. Actualiza el historial e inténtalo de nuevo.|Não foi possível baixar o áudio. Atualize o histórico e tente novamente.|音声をダウンロードできませんでした。履歴を更新して再試行してください。|오디오를 다운로드할 수 없습니다. 기록을 새로 고침한 후 다시 시도하세요.
 `.trim()
 

@@ -1,0 +1,37 @@
+.ft-cloud-gen {
+  margin: 10px 0 4px; border: 1px solid var(--flowtu-border, rgba(174,199,225,.18)); border-radius: 12px;
+  background: var(--flowtu-glass, rgba(24,36,48,.55)); padding: 0 10px;
+}
+.ft-cloud-gen > summary {cursor: pointer; padding: 9px 2px; font: 600 13px/1.3 system-ui, sans-serif; color: var(--flowtu-text, #e8edf4); user-select: none}
+.ft-cloud-gen > summary::marker {color: var(--flowtu-orange, #ff9b47)}
+.ft-cloud-gen-body {display: grid; gap: 9px; padding: 2px 2px 12px}
+.ft-cloud-gen-row {display: flex; align-items: end; gap: 9px; flex-wrap: wrap}
+.ft-cloud-gen-row label {display: grid; gap: 4px; font: 12px/1.2 system-ui, sans-serif; color: #a9bccd}
+.ft-cloud-gen-row select {min-height: 32px; padding: 4px 8px; border-radius: 8px; border: 1px solid #42546a; background: #0d1723; color: inherit; font: 13px system-ui, sans-serif}
+.ft-cloud-gen-row [data-field=cloud-credits] {font: 12px/1.4 system-ui, sans-serif; color: var(--flowtu-orange, #ff9b47); padding-bottom: 6px}
+.ft-cloud-gen-mode {display: flex; gap: 6px}
+.ft-cloud-gen-mode button {flex: 1 1 auto; min-height: 30px; border-radius: 8px; border: 1px solid #42546a; background: #16222f; color: #c3d3e2; font: 12.5px system-ui, sans-serif; cursor: pointer}
+.ft-cloud-gen-mode button[aria-pressed=true] {background: #2c4a68; color: #fff; border-color: #5a83a8}
+.ft-cloud-gen-mode button:disabled {opacity: .45; cursor: not-allowed}
+.ft-cloud-gen-lyrics {display: grid; gap: 4px; font: 12px/1.2 system-ui, sans-serif; color: #a9bccd}
+.ft-cloud-gen-lyrics textarea {resize: vertical; border-radius: 8px; border: 1px solid #42546a; background: #0d1723; color: inherit; font: 13px/1.5 system-ui, sans-serif; padding: 7px}
+.ft-cloud-gen-results {display: grid; gap: 8px}
+.ft-cloud-song {display: grid; grid-template-columns: 1fr auto; gap: 3px 9px; padding: 8px 10px; border: 1px solid #35485c; border-radius: 10px; background: #101a26; align-items: center}
+.ft-cloud-song strong {font: 600 13px/1.3 system-ui, sans-serif; color: #dfe9f2; overflow-wrap: anywhere}
+.ft-cloud-song small {font: 11.5px system-ui, sans-serif; color: #93a9bc}
+.ft-cloud-song audio {grid-column: 1 / -1; width: 100%; height: 34px}
+.ft-cloud-gen [data-field=cloud-note][data-error=true] {color: #ff8d7a}
+.ft-cloud-gen [data-action=cloud-generate]:disabled {opacity: .5; cursor: not-allowed}
+.ft-cloud-gen [data-action=cloud-regenerate] {min-height: 32px; border-radius: 8px}
+.ft-cloud-gen-history h4 {margin: 4px 0 6px; font: 600 12px/1.3 system-ui, sans-serif; color: #92adc2; text-transform: uppercase; letter-spacing: .04em}
+.ft-cloud-gen-history [hidden] {display: none}
+.ft-cloud-history-empty {margin: 0; font: 12.5px system-ui, sans-serif; color: #8fa5b8}
+.ft-cloud-record {display: grid; gap: 6px; padding: 8px 0; border-top: 1px solid #2b3d4f}
+.ft-cloud-record-head {display: flex; align-items: center; justify-content: space-between; gap: 8px}
+.ft-cloud-record-head small {font: 11px/1.2 ui-monospace, monospace; color: #7e96aa}
+.ft-cloud-record-head span {display: flex; gap: 6px}
+.ft-cloud-record-head button {min-height: 26px; padding: 3px 9px; border-radius: 7px; border: 1px solid #42546a; background: #16222f; color: #c3d3e2; font: 12px system-ui, sans-serif; cursor: pointer}
+.ft-cloud-record-head button:hover {background: #24364a}
+.ft-cloud-song .ft-cloud-add {grid-column: 1 / -1; justify-self: start; min-height: 26px; padding: 3px 10px; border-radius: 7px; border: 1px solid #4a6b8c; background: #21384e; color: #cadcec; font: 12px system-ui, sans-serif; cursor: pointer}
+.ft-cloud-song .ft-cloud-add:hover {background: #2c4a68}
+.ft-cloud-song .ft-cloud-add:disabled {opacity: .5; cursor: wait}

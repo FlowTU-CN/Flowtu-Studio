@@ -31,7 +31,7 @@ if (window.crossOriginIsolated) {
     message.style.zIndex = "3"
     document.body.append(message)
     if ("serviceWorker" in navigator && sessionStorage.getItem("flowtu-isolation-retried") !== "yes") {
-        navigator.serviceWorker.register("/flowtu-isolation.js").then(async () => {
+        navigator.serviceWorker.register(`${import.meta.env.BASE_URL}flowtu-isolation.js`).then(async () => {
             await navigator.serviceWorker.ready
             sessionStorage.setItem("flowtu-isolation-retried", "yes")
             if (navigator.serviceWorker.controller) location.reload()

@@ -65,7 +65,7 @@ export const App = (service: StudioService) => {
                     {path: "/stats", factory: DashboardPage},
                     {
                         path: "/users", factory: (context) => {
-                            history.replaceState(null, "", "/stats")
+                            history.replaceState(null, "", `${import.meta.env.BASE_URL}stats`)
                             return DashboardPage(context)
                         }
                     },

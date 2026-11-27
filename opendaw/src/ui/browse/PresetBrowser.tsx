@@ -40,7 +40,7 @@ const tagSource = (list: ReadonlyArray<PresetMeta>, source: PresetSource): Reado
 const effectDevices = (records: Record<string, EffectFactory>): ReadonlyArray<StockDeviceMeta> =>
     Object.entries(records).map(([key, factory]) => ({
         key, name: effectMenuLabel(factory), icon: factory.defaultIcon, brief: factory.briefDescription,
-        externalIconUrl: factory.external ? "/images/tone3000.svg" : undefined
+        externalIconUrl: factory.external ? `${import.meta.env.BASE_URL}images/tone3000.svg` : undefined
     }))
 
 type Construct = {

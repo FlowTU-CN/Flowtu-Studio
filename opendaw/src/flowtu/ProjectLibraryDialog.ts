@@ -2,7 +2,7 @@ import './project-library.css'
 import {chooseFileDestination, type FileDestination} from './file-destination'
 import {ProjectStorage} from '@opendaw/studio-core'
 import {tr} from './studio-language'
-import {accountOwner, cloudLibrary, guestOwner, listDeviceProjects, type CloudProject, type LibraryStatus, type ProjectEntry} from './project-library'
+import {accountOwner, cloudLibrary, deleteCloudProject, guestOwner, listDeviceProjects, removeDeviceProject, type CloudProject, type LibraryStatus, type ProjectEntry} from './project-library'
 
 export type LibraryChoice = {kind: 'local'; entry: ProjectEntry} |
     {kind: 'cloud'; owner: string; remote: CloudProject; cached?: ProjectEntry} | {kind: 'import'} | {kind: 'legacy'; item: ProjectStorage.ListEntry}
@@ -90,6 +90,40 @@ export function chooseConflictCopy(savedOnDevice: boolean): Promise<boolean> {
         dialog.showModal(); copy.focus()
     })
 }
+export function confirmCloudDelete(name: string): Promise<boolean> {
+    const dialog = modal('Delete cloud project')
+    const detail = el('p', tr('Delete this project from your account? The device copy is removed too. This cannot be undone.') + ' “' + name + '”')
+    const footer = el('footer'), keep = el('button', tr('Keep project')), remove = el('button', tr('Delete'))
+    keep.onclick = () => dialog.close()
+    remove.onclick = () => dialog.close('delete')
+    footer.append(keep,remove); dialog.append(detail,footer)
+    return new Promise(resolve => {
+        dialog.onclose = () => {dialog.remove(); resolve(dialog.returnValue === 'delete')}
+        dialog.showModal(); keep.focus()
+    })
+}
+// First successful cloud generation in a batch: name the project before it is linked to the songs.
+export function requestGenerationProjectName(suggestion: string): Promise<string | undefined> {
+    const dialog = modal('Name this project')
+    const form = el('form'), label = el('label', tr('Project name')), input = el('input')
+    input.name = 'projectName'; input.required = true; input.maxLength = 120
+    input.value = suggestion.trim().slice(0, 120)
+    label.append(input)
+    const detail = el('small', tr('Saving to your account links the generated songs to this project.'))
+    const submit = el('button', tr('Save')); submit.className = 'ft-project-primary'
+    form.append(label, detail, submit); dialog.append(form)
+    return new Promise(resolve => {
+        let name: string | undefined
+        form.onsubmit = event => {
+            event.preventDefault()
+            const value = input.value.trim()
+            if (!value) return
+            name = value; dialog.close()
+        }
+        dialog.onclose = () => {dialog.remove(); resolve(name)}
+        dialog.showModal(); input.focus(); input.select()
+    })
+}
 type SavedChoice = Exclude<LibraryChoice,{kind:'import'}>
 function recentKey(choice: SavedChoice) {
     if (choice.kind === 'legacy') return 'flowtu.project.opened.legacy.' + choice.item.uuid
@@ -101,7 +135,8 @@ export function rememberOpenedProject(choice: SavedChoice) {
     try {localStorage.setItem(recentKey(choice),String(Date.now()))} catch { /* Optional browser preference. */ }
 }
 export function createSavedProjectList(select: (choice:LibraryChoice)=>void, sortByRecent = false) {
-    function projectButton(entry: {name: string; updatedAt: string; size?: number}, label: string, choice: SavedChoice) {
+    function projectButton(entry: {name: string; updatedAt: string; size?: number}, label: string, choice: SavedChoice,
+        onDelete?: (name: string) => Promise<void>) {
         const button = el('button')
         button.type = 'button'; button.className = 'ft-project-item'
         const detail = [label, new Date(entry.updatedAt).toLocaleString()]
@@ -111,9 +146,31 @@ export function createSavedProjectList(select: (choice:LibraryChoice)=>void, sor
         if (sortByRecent) {
             try {recent = Math.max(recent, Number(localStorage.getItem(recentKey(choice))) || 0)} catch { /* Keep last save order. */ }
         }
-        button.dataset.recent = String(recent)
         button.onclick = () => select(choice)
-        return button
+        if (!onDelete) {button.dataset.recent = String(recent); return button}
+        // A sibling wrapper keeps the delete control out of the opening button (no nested interactives).
+        const row = el('div'); row.className = 'ft-project-row'
+        row.dataset.recent = String(recent)
+        const remove = el('button', tr('Delete'))
+        remove.type = 'button'; remove.className = 'ft-project-delete'
+        remove.setAttribute('aria-label', tr('Delete') + ' ' + entry.name)
+        remove.onclick = () => {void onDelete(entry.name)}
+        row.append(button, remove)
+        return row
+    }
+    const removeCloud = async (owner: string, remote: CloudProject) => {
+        if (!await confirmCloudDelete(remote.name)) return
+        status.textContent = tr('Deleting project…'); refresh.disabled = true
+        try {
+            await deleteCloudProject(owner, remote.id, remote.revision)
+            // The cloud copy is authoritative. A leftover cache entry is harmless and removed best-effort.
+            await removeDeviceProject(owner, remote.id).catch(() => undefined)
+            status.textContent = tr('Project deleted.')
+            await render()
+        } catch (error) {
+            status.textContent = tr('Delete failed') + ' · ' + (error instanceof Error ? error.message : String(error))
+            refresh.disabled = false
+        }
     }
     const element = el('section'); element.className='ft-saved-projects'
     const listing = el('div'); listing.className = 'ft-project-list'
@@ -145,13 +202,14 @@ export function createSavedProjectList(select: (choice:LibraryChoice)=>void, sor
                 const entries = new Map(cached.map(entry => [entry.id,entry]))
                 const rows = sorted(cloud.library.projects).map(remote => {
                     const entry = entries.get(remote.id)
+                    const drop = () => removeCloud(owner, remote)
                     if (entry && !entry.pending && entry.revision === remote.revision) {
                         entries.delete(remote.id)
-                        return projectButton(remote,tr('Synced'), {kind:'local', entry})
+                        return projectButton(remote,tr('Synced'), {kind:'local', entry}, drop)
                     }
                     if (entry && !entry.pending) entries.delete(remote.id)
                     // A divergent device draft remains independently available.
-                    return projectButton(remote,tr('Cloud version'), {kind:'cloud', owner, remote, cached:entry})
+                    return projectButton(remote,tr('Cloud version'), {kind:'cloud', owner, remote, cached:entry}, drop)
                 })
                 section('Your account', rows)
                 section('Device drafts', sorted([...entries.values()]).map(entry =>

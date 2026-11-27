@@ -21,6 +21,7 @@ overrides:
   '@opendaw/studio-scripting': 0.0.91
 
 patchedDependencies:
+  '@opendaw/lib-jsx@0.0.95': 9f8d4cd412bc5c95b806b4eed3ef90951d2799f6e7cc71dac1c45f07ef05adbd
   '@opendaw/studio-adapters@0.3.9': 7d1f6db688ccff2679099b1d45d19effc236aaaafc8a96443d4b1305d6a45957
   '@opendaw/studio-boxes@0.0.115': 751909dec373ea63e1b8e70a5a71c5081b54847643e93cf5cef289cb1004df4e
   '@opendaw/studio-core@0.2.11': eeacb105ad82fd3aaa8f2675ab96f4cf845a5c19502c1892b758abd2e2641743
@@ -52,7 +53,7 @@ importers:
         version: link:packages/lib/inference
       '@opendaw/lib-jsx':
         specifier: 0.0.95
-        version: 0.0.95
+        version: 0.0.95(patch_hash=9f8d4cd412bc5c95b806b4eed3ef90951d2799f6e7cc71dac1c45f07ef05adbd)
       '@opendaw/lib-midi':
         specifier: 0.0.78
         version: 0.0.78
@@ -1740,7 +1741,7 @@ snapshots:
       '@opendaw/lib-runtime': 0.0.89
       '@opendaw/lib-std': 0.0.88
 
-  '@opendaw/lib-jsx@0.0.95':
+  '@opendaw/lib-jsx@0.0.95(patch_hash=9f8d4cd412bc5c95b806b4eed3ef90951d2799f6e7cc71dac1c45f07ef05adbd)':
     dependencies:
       '@opendaw/lib-dom': 0.0.93
       '@opendaw/lib-std': 0.0.88

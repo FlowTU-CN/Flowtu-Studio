@@ -38,6 +38,13 @@ Saved on this device · Cloud sync pending.|已保存至本机，云同步待完
 Saved on this device · Sign in from Open project to sync.|工程已保存至本机，可从「打开工程」登录同步。|Guardado localmente. Inicia sesión en Abrir proyecto para sincronizar.|Salvo localmente. Entre em Abrir projeto para sincronizar.|デバイスに保存しました。「プロジェクトを開く」からログインして同期できます。|기기에 저장했습니다. 프로젝트 열기에서 로그인해 동기화하세요.
 Saved on this device · Cloud unavailable.|工程已保存至本机，云端暂不可用。|Guardado localmente. Nube no disponible.|Salvo localmente. Nuvem indisponível.|デバイスに保存しました。クラウドは利用できません。|기기에 저장했습니다. 클라우드를 사용할 수 없습니다.
 Opened cloud version · Save creates a separate copy.|已打开云端版本，保存时会新建一个副本。|Versión en la nube abierta. Guardar creará una copia.|Versão na nuvem aberta. Salvar criará uma cópia.|クラウド版を開きました。保存するとコピーが作られます。|클라우드 버전을 열었습니다. 저장하면 사본을 만듭니다.
-Exporting project copy…|正在导出工程副本…|Exportando copia del proyecto…|Exportando cópia do projeto…|コピーを書き出し中…|프로젝트 사본 내보내는 중…
+Exporting project copy…|正在导出工程副本…|Exportando copia del proyecto…|Exportando cópia del proyecto…|コピーを書き出し中…|프로젝트 사본 내보내는 중…
 Project copy exported.|已导出工程副本。|Copia del proyecto exportada.|Cópia do projeto exportada.|コピーを書き出しました。|프로젝트 사본을 내보냈습니다.
+Delete|删除|Eliminar|Excluir|削除|삭제
+Delete cloud project|删除云工程|Eliminar proyecto de la nube|Excluir projeto da nuvem|クラウドプロジェクトを削除|클라우드 프로젝트 삭제
+Delete this project from your account? The device copy is removed too. This cannot be undone.|从账号删除此工程？本机副本也会一并移除，此操作不可撤销。|¿Eliminar este proyecto de tu cuenta? La copia del dispositivo también se elimina. No se puede deshacer.|Excluir este projeto da sua conta? A cópia do dispositivo também será removida. Não é possível desfazer.|アカウントからこのプロジェクトを削除しますか？デバイスのコピーも削除されます。この操作は元に戻せません。|계정에서 이 프로젝트를 삭제할까요? 기기 사본도 함께 삭제되며 되돌릴 수 없습니다.
+Keep project|保留工程|Conservar proyecto|Manter projeto|プロジェクトを残す|프로젝트 유지
+Deleting project…|正在删除工程…|Eliminando proyecto…|Excluindo projeto…|プロジェクトを削除中…|프로젝트 삭제 중…
+Project deleted.|工程已删除。|Proyecto eliminado.|Projeto excluído.|プロジェクトを削除しました。|프로젝트를 삭제했습니다.
+Delete failed|删除失败|Error al eliminar|Falha ao excluir|削除できませんでした|삭제 실패
 `.trim()

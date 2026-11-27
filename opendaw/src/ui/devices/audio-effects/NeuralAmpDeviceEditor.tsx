@@ -217,7 +217,7 @@ export const NeuralAmpDeviceEditor = ({lifecycle, service, adapter, deviceHost}:
                                               tooltip: "Browse tone3000.com"
                                           }}
                                           className="tone3000-button">
-                                      <img src="images/tone3000.svg" alt="tone3000 logo"/>
+                                      <img src={`${import.meta.env.BASE_URL}images/tone3000.svg`} alt="tone3000 logo"/>
                                   </Button>
                                   <Button lifecycle={lifecycle}
                                           onClick={browseLocal}

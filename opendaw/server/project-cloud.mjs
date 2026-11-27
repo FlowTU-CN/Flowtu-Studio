@@ -72,6 +72,21 @@ export async function cloudProjects(request,env) {
         if(match && match!=='"'+result.customMetadata.revision+'"') return fail(412,'Another device saved a newer revision.')
         return streamProject(bucket,owner,id,await result.json(),result.customMetadata.revision)
     }
+    if(request.method==='DELETE') {
+        if(!expectedAccount) return fail(400,'Expected account is required.')
+        const current=await bucket.head(key)
+        if(!current) return fail(404,'Project not found.')
+        const match=request.headers.get('If-Match')
+        if(match && match!=='"'+current.customMetadata.revision+'"') return fail(412,'A newer revision exists. Refresh before deleting.')
+        await bucket.delete(key)
+        let cursor
+        do {
+            const batch=await bucket.list({prefix:'data/'+owner+'/'+id+'/',cursor})
+            for(const object of batch.objects) await bucket.delete(object.key)
+            cursor=batch.truncated?batch.cursor:undefined
+        } while(cursor)
+        return new Response(null,{status:204,headers:privacy})
+    }
     if(request.method!=='PUT') return fail(405,'Unsupported request.')
     if(request.headers.get('Origin') && request.headers.get('Origin')!==url.origin) return fail(403,'Cross-origin write denied.')
     if(!expectedAccount) return fail(400,'Expected account is required.')

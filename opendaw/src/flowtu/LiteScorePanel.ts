@@ -12,6 +12,8 @@ import {requestLiteGuide} from './lite-model'
 import {createLiteTrackLanes} from './LiteTrackLanes'
 import {installLiteMediaDrop} from './lite-media-drop'
 import {installAssetDrag} from './asset-drag'
+import {installCloudGenerationPanel} from './CloudGenerationPanel'
+import {readDirection} from './scoring-direction'
 import {liteTracks} from './lite-track-edit'
 import {clearAudioRange, getAudioRange, getExplicitTimelineSelection, getTimelineSelection, setTimelineSelection, subscribeTimelineSelection, loopTimelineSelection} from './timeline-selection'
 import {copyTrackRange} from './range-clipboard'
@@ -35,6 +37,10 @@ type LitePanelAPI = {
     getVideo(): {duration: number; offset: number; ready: boolean; url?: string; file?: File}
     markCue(): boolean
     beforeGenerate?():void
+    cloud?: {saveProjectForGeneration(name: string, generationKey: string): Promise<void>;
+        cloudProjectId(): string | undefined;
+        generationScope(): string | undefined;
+        addToProject(song: {songKey: string; title: string; durationMs?: number; playUrl: string | null}): Promise<void>}
 }
 function node<K extends keyof HTMLElementTagNameMap>(tag: K, cls: string) {
     const el = document.createElement(tag)
@@ -115,6 +121,35 @@ export function createLiteScorePanel(service: StudioService, api: LitePanelAPI) 
     prompt.oninput = () => {cancelGeneration(); hasDraft = true; schedule()}
     prompt.onchange = () => run(commit)
     tone.onchange = () => run(() => {cancelGeneration(); hasDraft = true; commit()})
+    // Cloud generation shares the lite prompt; the range stays selection-driven as elsewhere in this view.
+    const cloudApi = api.cloud
+    const cloudGeneration = cloudApi ? installCloudGenerationPanel({
+        currentInput: () => {
+            if (!project || !service.hasProfile || service.project !== project) return undefined
+            const state = readScoring(project), cue = selected(state)
+            const range = targetDirection(project, state, cue)
+            if (!range) return undefined
+            const owner = cue ?? state
+            return {prompt: prompt.value.trim() || owner.prompt, start: range.start, end: range.end,
+                direction: owner.direction, style: owner.direction?.style ?? 'prompt'}
+        },
+        applyInput: input => run(() => {
+            if (!project) return
+            const state = readScoring(project)
+            prompt.value = input.prompt
+            const direction = input.direction ? readDirection(input.direction) : undefined
+            const rangeOk = Number.isFinite(input.start) && Number.isFinite(input.end) && input.end > input.start
+            writeScoring(project, {...state, prompt: input.prompt, start: rangeOk ? input.start : state.start,
+                end: rangeOk ? input.end : state.end, ...(direction ? {direction} : {}), cues: state.cues})
+            hasDraft = false
+            schedule()
+        }),
+        saveProjectForGeneration: (name, generationKey) => cloudApi.saveProjectForGeneration(name, generationKey),
+        cloudProjectId: () => cloudApi.cloudProjectId(),
+        generationScope: () => cloudApi.generationScope(),
+        addToProject: song => cloudApi.addToProject(song)
+    }, document.createElement('div')) : undefined
+    if (cloudGeneration) inspector.insertBefore(cloudGeneration.element, takes)
     async function generateVersion() {
         const p = project
         if (!p || pending) return
@@ -299,6 +334,7 @@ export function createLiteScorePanel(service: StudioService, api: LitePanelAPI) 
     }
     return {inspector, timeline, dock: dock.element, setActive, refresh, dispose() {
         setActive(false); disposed = true; life.terminate(); graphLife.terminate()
+        cloudGeneration?.dispose()
         desktop.removeEventListener('change',syncTouchEditor); settings(); unwatch(); audition.dispose(); dock.dispose(); inspector.remove(); timeline.remove()
     }}
 }

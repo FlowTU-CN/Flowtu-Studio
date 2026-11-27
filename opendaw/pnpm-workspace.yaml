@@ -20,6 +20,7 @@ overrides:
   "@opendaw/studio-scripting": "0.0.91"
 shamefullyHoist: true
 patchedDependencies:
+  '@opendaw/lib-jsx@0.0.95': patches/@opendaw__lib-jsx@0.0.95.patch
   "@opendaw/studio-adapters@0.3.9": patches/tempo-map-bypass.patch
   "@opendaw/studio-boxes@0.0.115": patches/region-equal-power.patch
   "@opendaw/studio-core@0.2.11": patches/keep-shared-sample.patch

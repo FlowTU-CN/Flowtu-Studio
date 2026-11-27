@@ -26,6 +26,7 @@ import {installAssetDrag} from './asset-drag'
 import {attachDirectionRetrieval, type Axes, type DirectionPad, type PadQuery} from './direction-rag'
 import {neutralDirection, type ScoreDirection} from './scoring-direction'
 import {createDirectionControls} from './DirectionControls'
+import {installCloudGenerationPanel} from './CloudGenerationPanel'
 import {createFlowDeck} from './FlowDeck'
 import {createCueNameControl} from './CueNameControl'
 import './scoring-workspace.css'
@@ -37,6 +38,10 @@ export interface ScoringWorkspaceAPI {
     importVideo(): void
     importAudio(): void
     saveProject(): void
+    saveProjectForGeneration(name: string, generationKey: string): Promise<void>
+    generationScope(): string | undefined
+    cloudProjectId(): string | undefined
+    addGeneratedSong(song: {songKey: string; title: string; durationMs?: number; playUrl: string | null}): Promise<void>
     setVideoDock(host: HTMLElement | null, hideFloating?: boolean): void
     openVideoWindow(): void
     dockVideoWindow(): void
@@ -63,7 +68,8 @@ export function installScoringWorkspace(api: ScoringWorkspaceAPI, bar: HTMLEleme
           <label class="ft-score-prompt-label">Describe the instrument and movement<textarea data-field="prompt" maxlength="500" rows="3" placeholder="Generate warm piano chords, D minor, add 20% reverb" aria-label="Scoring music prompt"></textarea></label>
           <div class="ft-score-presets"><button data-preset="keys">Piano</button><button data-preset="pad">Ambient</button><button data-preset="bass">Bass</button></div>
           <div class="ft-score-generate-row"><label>Default instrument<select data-field="tone" aria-label="Scoring instrument"></select></label><button class="ft-score-primary" data-action="generate">Generate MIDI</button></div>
-          <p class="ft-score-caption">Local commands · New editable MIDI track · Follows project harmony.</p></section>
+          <p class="ft-score-caption">Local commands · New editable MIDI track · Follows project harmony.</p>
+          <div class="ft-cloud-gen-host"></div></section>
         </section>
         <section class="ft-score-monitor" aria-label="Reference video">
           <div class="ft-score-stage" data-monitor-state="empty">
@@ -309,6 +315,28 @@ export function installScoringWorkspace(api: ScoringWorkspaceAPI, bar: HTMLEleme
         }
         return currentCue() ?? state
     }
+    // Cloud song generation shares the committed prompt, range and direction dials above.
+    const cloudPanel = installCloudGenerationPanel({
+        currentInput: () => {
+            if (!service.hasProfile) return undefined
+            const committed = commit()
+            return {prompt: committed.prompt, start: committed.start, end: committed.end,
+                direction: committed.direction, style: committed.direction?.style ?? 'prompt'}
+        },
+        applyInput: input => run(() => {
+            prompt.value = input.prompt
+            if (Number.isFinite(input.start) && Number.isFinite(input.end) && input.end > input.start) {
+                start.value = String(Math.round(input.start * 1000) / 1000)
+                end.value = String(Math.round(input.end * 1000) / 1000)
+            }
+            direction.setValue(input.direction)
+            commit()
+        }),
+        cloudProjectId: () => api.cloudProjectId(),
+        generationScope: () => api.generationScope(),
+        saveProjectForGeneration: api.saveProjectForGeneration,
+        addToProject: song => api.addGeneratedSong(song)
+    }, root.querySelector('.ft-cloud-gen-host')!)
     const selectCue = (id: string) => {
         if (active && collapsed) open()
         refresh()
@@ -680,6 +708,7 @@ export function installScoringWorkspace(api: ScoringWorkspaceAPI, bar: HTMLEleme
     window.addEventListener('keydown', markKey, true)
     const timer = setInterval(refresh, 200)
     return {setComposerActive:composer.setActive, showAssets() {if (collapsed) open(); library.refresh(); showMedia(true)}, markCueAtPlayhead: markCue, open, restoreMode, refreshVideo, attachTransport, dispose() {
+        cloudPanel.dispose()
         retrievers.melodyArrangement.clear(); retrievers.emotionStyle.clear()
         composer.dispose()
         creationRange.cancel(); players.forEach(player => player.dispose()); players.clear()

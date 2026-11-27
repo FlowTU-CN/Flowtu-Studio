@@ -11,13 +11,13 @@ pnpm run setup
 pnpm dev
 ```
 
-打开 http://127.0.0.1:4173 。本机已安装全部依赖，也可以双击 `start.command`。生产构建用 `pnpm build`，输出为 `dist/`；`pnpm preview` 预览生产版本。
+打开 http://127.0.0.1:4173/studio/ 。本机已安装全部依赖，也可以双击 `start.command`。生产构建用 `pnpm build`，输出为 `dist/`；`pnpm preview` 预览生产版本。构建固定使用子路径 `base: '/studio/'`，与主站 `www.flowtu.cn/studio/` 挂载一致；服务器需将该前缀指向本 dist 目录（dev/preview 已自带该前缀与 COOP/COEP 头）。
 
 ## 可以实际完成的操作
 
 ### 极简配乐与画面模型
 
-打开 [极简模式](http://127.0.0.1:4173/?mode=lite) 使用自己的素材，或打开 [可试剪的本地示例](http://127.0.0.1:4173/?mode=lite&example=last-train&focus=edit)。顶部可以在极简配乐和专业模式之间切换。两者使用同一工程、视频、音轨和撤销记录。
+打开 [极简模式](http://127.0.0.1:4173/studio/?mode=lite) 使用自己的素材，或打开 [可试剪的本地示例](http://127.0.0.1:4173/studio/?mode=lite&example=last-train&focus=edit)。顶部可以在极简配乐和专业模式之间切换。两者使用同一工程、视频、音轨和撤销记录。
 
 导入视频会在浏览器提取代表帧。极简时间线显示所用分析器、可定位的场景和可下载的提示词 JSON。后端启用 OpenAI 时会把带时间戳的代表帧发给视觉模型，按画面内容和情绪变化建议配乐段落。在支持 Apple Vision 的本地 macOS 环境可使用离线物体分类。纯静态托管也能在浏览器检测切点、亮度和运动。已有段落及已选版本保存在工程内。
 
@@ -221,3 +221,18 @@ To use your own server for the optional sample, SoundFont, device preset and WCL
 | wclaps | index.json (version 1 folder tree) | UUID.wclap |
 
 Start an unused preset catalogue with `[]` and each unused folder catalogue with `{"version":1,"folders":[]}`. The same-origin library is read-only in Studio. Install the indexes and their matching assets on the server. Without this setting, existing projects keep their original catalogue provider.
+
+
+## Studio 真实 dev 联调
+
+本地开发可显式开启仅监听本机的 API 代理：
+
+```sh
+FLOWTU_STUDIO_API_TARGET=https://dev.flowtu.cn pnpm --dir opendaw dev
+```
+
+代理只转发 `/api/e/*`，目标必须是无凭据的 HTTP(S) origin。默认不启用代理；发布构建仍使用 `/studio/` 同源挂载。同步与生成客户端都会携带主站 `flowtu_go_jwt` Bearer，并保留同源 Cookie。试听和加入工程按需鉴权下载音频，Bearer 仅发往同源 `/api/e/` 地址。不要把测试 JWT 写进配置、命令、日志或源码。
+
+真实 dev 的工程协议检查可用 `opendaw/tests-flowtu/studio-live-checks.fixture.ts`，需在已授权的登录 origin 的空白页面运行。fixture 会创建标注为「联调临时」的工程并提供清理函数；`startLiveGeneration()` 会真实消耗积分，必须单独确认后调用一次。普通本地回归使用 `project-generation-browser.fixture.ts`，其中 API 为 stub，不消耗积分。
+
+本地 API 代理不改变 OSS 的 CORS 白名单。2026-11-26 实测 `localhost:5199 → 127.0.0.1:4173 → OSS` 的跨源跳转使最终请求带 `Origin: null`，被 OSS 拦截。应在真正同源挂载环境补验，不应放行 null；不能通过 API 200 推断音频下载已通过。

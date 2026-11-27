@@ -4,7 +4,7 @@ export const subscribeFavicon = (observable: ObservableValue<Nullable<unknown>>)
     return observable.catchupAndSubscribe(owner => {
         const link = document.querySelector<HTMLLinkElement>("link[rel='icon']")
         if (isDefined(link)) {
-            link.href = isDefined(owner.getValue()) ? "/flowtu-icon-live.png" : "/flowtu-icon.png"
+            link.href = isDefined(owner.getValue()) ? `${import.meta.env.BASE_URL}flowtu-icon-live.png` : `${import.meta.env.BASE_URL}flowtu-icon.png`
         }
     })
 }
